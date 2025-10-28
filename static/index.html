@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>GPT + Stockfish Chess Tutor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- chessboard.js + chess.js -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chess.js@0.12.0/chess.min.js"></script>
+  <style>
+    :root { --w: 420px; }
+    body { font-family: -apple-system, Arial, sans-serif; padding: 16px; max-width: 980px; margin: 0 auto; }
+    h2 { margin: 0 0 12px; }
+    #board { width: var(--w); max-width: 92vw; margin: 0 auto; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 16px; }
+    textarea { width: 100%; min-height: 120px; }
+    .panel { flex: 1 1 360px; }
+    .controls { display:flex; gap:8px; justify-content:center; margin:10px 0; flex-wrap: wrap;}
+    button, select { padding: 8px 12px; font-size: 14px; }
+    .pill { background:#f3f3f3; padding:6px 10px; border-radius:999px; font-size:12px; }
+    footer { margin-top:16px; font-size:12px; color:#666; text-align:center; }
+  </style>
+</head>
+<body>
+  <h2>♟ GPT + Stockfish Chess Tutor</h2>
+  <div class="pill">드래그해서 수를 두세요 · 분석하기 버튼 클릭</div>
+
+  <div id="board"></div>
+  <div class="controls">
+    <button id="startBtn">초기화</button>
+    <button id="undoBtn">되돌리기</button>
+    <select id="levelSel">
+      <option value="beginner" selected>설명: 초급</option>
+      <option value="intermediate">설명: 중급</option>
+      <option value="advanced">설명: 고급</option>
+    </select>
+    <button id="analyzeBtn">이 위치 분석하기</button>
+  </div>
+
+  <div class="row">
+    <div class="panel">
+      <h3>엔진 요약</h3>
+      <textarea id="summary" readonly></textarea>
+    </div>
+    <div class="panel">
+      <h3>GPT 해설</h3>
+      <textarea id="explain" readonly></textarea>
+    </div>
+  </div>
+
+  <footer>
+    위치 FEN: <span id="fenTxt" class="pill"></span>
+  </footer>
+
+<script>
+  // 체스 보드 & 게임 상태
+  const game = new Chess();
+  const board = Chessboard('board', {
+    position: 'start',
+    draggable: true,
+    pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
+    onDrop: (from, to) => {
+      const move = game.move({ from, to, promotion: 'q' });
+      if (!move) return 'snapback';
+      refreshFen();
+    }
+  });
+
+  function refreshFen() { document.getElementById('fenTxt').textContent = game.fen(); }
+  refreshFen();
+
+  document.getElementById('startBtn').onclick = () => { game.reset(); board.start(); refreshFen(); };
+  document.getElementById('undoBtn').onclick  = () => { game.undo(); board.position(game.fen()); refreshFen(); };
+
+  async function callAPI(payload) {
+    // 1차: /analyze, 실패하면 2차: /app/pgn
+    for (const path of ['/analyze', '/app/pgn']) {
+      try {
+        const res = await fetch(path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) return await res.json();
+      } catch (e) { /* try next */ }
+    }
+    throw new Error('API 엔드포인트 호출 실패');
+  }
+
+  document.getElementById('analyzeBtn').onclick = async () => {
+    const summaryEl = document.getElementById('summary');
+    const explainEl = document.getElementById('explain');
+    summaryEl.value = '분석 중… (Stockfish)'; explainEl.value = '';
+
+    const payload = {
+      fen: game.fen(),
+      played_san: null,
+      level: document.getElementById('levelSel').value,
+      depth: 14,
+      multipv: 3
+    };
+
+    try {
+      const out = await callAPI(payload);
+      summaryEl.value = out.summary || JSON.stringify(out, null, 2);
+      explainEl.value = out.explanation || '(설명 없음)';
+    } catch (err) {
+      summaryEl.value = '에러: ' + err.message;
+      explainEl.value = '';
+    }
+  };
+</script>
+</body>
+</html>
