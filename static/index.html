@@ -5,48 +5,50 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>GPT + Stockfish Chess Tutor</title>
 
-  <!-- ✅ 확실히 동작하는 CDN -->
-  <link rel="stylesheet" href="https://unpkg.com/chessboard-element@1.5.7/dist/chessboard-1.0.0.css" />
-  <script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.13.4/chess.min.js"></script>
+  <!-- chessboard.js (CSS/JS) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+
+  <!-- chess.js 로더: jsDelivr → 실패 시 unpkg 폴백 (UMD 0.13.x: window.Chess 제공) -->
+  <script>
+    (function loadChessJs(){
+      function add(src, onload){
+        var s=document.createElement('script'); s.src=src; s.async=false; s.onload=onload;
+        s.onerror=function(){ console.warn('Failed to load', src); onload(false); };
+        document.head.appendChild(s);
+      }
+      function done(){
+        if (typeof window.Chess === 'function') {
+          initApp(); // 모든 스크립트 준비 완료 → 앱 시작
+        } else {
+          // 폴백 2 실패 시 에러 표시
+          document.addEventListener('DOMContentLoaded', function(){
+            document.body.insertAdjacentHTML('beforeend',
+              "<p style='color:#c00;text-align:center;'>보드 로딩 오류: chess.js 로드를 실패했습니다.</p>");
+          });
+        }
+      }
+      // 1차: jsDelivr
+      add("https://cdn.jsdelivr.net/npm/chess.js@0.13.4/chess.min.js", function(ok){
+        if (typeof window.Chess === 'function') return done();
+        // 2차: unpkg 폴백
+        add("https://unpkg.com/chess.js@0.13.4/chess.min.js", done);
+      });
+    })();
+  </script>
 
   <style>
-    :root { --w: 440px; }
-    body {
-      font-family: -apple-system, Arial, 'Noto Sans KR', sans-serif;
-      margin: 0; padding: 16px; max-width: 1100px;
-    }
-    h2 { margin: 0 0 8px; }
-    #board {
-      width: var(--w);
-      max-width: 92vw;
-      margin: 12px auto;
-      border: 1px solid #e5e7eb;
-      border-radius: 6px;
-    }
-    .pill {
-      display: inline-block;
-      background: #f4f5f7;
-      border-radius: 999px;
-      padding: 6px 10px;
-      font-size: 12px;
-      color: #555;
-    }
-    .controls {
-      display: flex;
-      gap: 8px;
-      justify-content: center;
-      flex-wrap: wrap;
-      margin: 8px 0 16px;
-    }
-    button, select {
-      padding: 8px 12px;
-      font-size: 14px;
-    }
-    .row { display: flex; gap: 16px; flex-wrap: wrap; }
-    .panel { flex: 1 1 360px; }
-    textarea { width: 100%; min-height: 140px; }
-    footer { margin-top: 10px; text-align: center; font-size: 12px; color: #666; }
+    :root{--w:440px}
+    body{font-family:-apple-system,Arial,'Noto Sans KR',sans-serif;margin:0;padding:16px;max-width:1100px}
+    h2{margin:0 0 8px}
+    #board{width:var(--w);max-width:92vw;margin:12px auto;border:1px solid #e5e7eb;border-radius:6px}
+    .pill{display:inline-block;background:#f4f5f7;border-radius:999px;padding:6px 10px;font-size:12px;color:#555}
+    .controls{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:8px 0 16px}
+    button,select{padding:8px 12px;font-size:14px}
+    .row{display:flex;gap:16px;flex-wrap:wrap}
+    .panel{flex:1 1 360px}
+    textarea{width:100%;min-height:140px}
+    footer{margin-top:10px;text-align:center;font-size:12px;color:#666}
   </style>
 </head>
 <body>
@@ -81,77 +83,75 @@
     현재 FEN: <span id="fenTxt" class="pill"></span>
   </footer>
 
+  <!-- ✅ 앱 본체: chess.js 로딩(위) 완료 후 initApp() 호출 -->
   <script>
-    window.addEventListener('DOMContentLoaded', () => {
-      try {
-        const game = new Chess();
-        const board = Chessboard('board', {
-          position: 'start',
-          draggable: true,
-          pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
-          onDrop: (from, to) => {
-            const move = game.move({ from, to, promotion: 'q' });
-            if (!move) return 'snapback';
-            board.position(game.fen());
-            refreshFen();
+    function initApp(){
+      window.addEventListener('DOMContentLoaded', () => {
+        try {
+          const game = new window.Chess(); // 전역 Chess 보장
+
+          const board = Chessboard('board', {
+            position: 'start',
+            draggable: true,
+            pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
+            onDrop: (from, to) => {
+              const move = game.move({ from, to, promotion: 'q' });
+              if (!move) return 'snapback';
+              board.position(game.fen());
+              refreshFen();
+            }
+          });
+
+          function refreshFen(){ document.getElementById('fenTxt').textContent = game.fen(); }
+          refreshFen();
+
+          document.getElementById('startBtn').onclick = () => { game.reset(); board.start(); refreshFen(); };
+          document.getElementById('undoBtn').onclick  = () => { game.undo(); board.position(game.fen()); refreshFen(); };
+
+          async function callAPI(payload){
+            for (const path of ['/analyze','/app/pgn']){
+              try{
+                const res = await fetch(path, {
+                  method:'POST',
+                  headers:{'Content-Type':'application/json'},
+                  body: JSON.stringify(payload)
+                });
+                if(res.ok) return await res.json();
+              }catch(e){}
+            }
+            throw new Error('API 호출 실패');
           }
-        });
 
-        function refreshFen() {
-          document.getElementById('fenTxt').textContent = game.fen();
-        }
-        refreshFen();
-
-        document.getElementById('startBtn').onclick = () => {
-          game.reset(); board.start(); refreshFen();
-        };
-        document.getElementById('undoBtn').onclick = () => {
-          game.undo(); board.position(game.fen()); refreshFen();
-        };
-
-        async function callAPI(payload) {
-          for (const path of ['/analyze', '/app/pgn']) {
-            try {
-              const res = await fetch(path, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-              });
-              if (res.ok) return await res.json();
-            } catch (e) {}
-          }
-          throw new Error('API 호출 실패');
-        }
-
-        document.getElementById('analyzeBtn').onclick = async () => {
-          const summaryEl = document.getElementById('summary');
-          const explainEl = document.getElementById('explain');
-          const level = document.getElementById('levelSel').value;
-          summaryEl.value = '분석 중...';
-          explainEl.value = '';
-
-          const payload = {
-            fen: game.fen(),
-            played_san: null,
-            level: level,
-            depth: 14,
-            multipv: 3
-          };
-
-          try {
-            const out = await callAPI(payload);
-            summaryEl.value = out.summary || JSON.stringify(out, null, 2);
-            explainEl.value = out.explanation || '(설명 없음)';
-          } catch (err) {
-            summaryEl.value = '에러: ' + err.message;
+          document.getElementById('analyzeBtn').onclick = async () => {
+            const summaryEl = document.getElementById('summary');
+            const explainEl = document.getElementById('explain');
+            const level = document.getElementById('levelSel').value;
+            summaryEl.value = '분석 중… (Stockfish 엔진 계산)';
             explainEl.value = '';
-          }
-        };
-      } catch (err) {
-        document.body.innerHTML +=
-          "<p style='color:red;text-align:center;'>보드 로딩 오류: " + err.message + "</p>";
-      }
-    });
+
+            const payload = {
+              fen: game.fen(),
+              played_san: null,
+              level: level,
+              depth: 14,
+              multipv: 3
+            };
+
+            try{
+              const out = await callAPI(payload);
+              summaryEl.value = out.summary || JSON.stringify(out,null,2);
+              explainEl.value = out.explanation || '(설명 없음)';
+            }catch(err){
+              summaryEl.value = '에러: ' + err.message;
+              explainEl.value = '';
+            }
+          };
+        } catch (err) {
+          document.body.insertAdjacentHTML('beforeend',
+            "<p style='color:#c00;text-align:center;'>보드 로딩 오류: " + err.message + "</p>");
+        }
+      });
+    }
   </script>
 </body>
 </html>
