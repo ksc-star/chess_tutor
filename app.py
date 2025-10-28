@@ -34,3 +34,6 @@ def analyze(req: AnalyzeRequest):
     summary = format_engine_summary(res)
     explanation = llm_explain(summary, level=req.level)
     return AnalyzeResponse(summary=summary, explanation=explanation)
+
+from fastapi.staticfiles import StaticFiles
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
