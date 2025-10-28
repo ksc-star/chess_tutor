@@ -1,6 +1,8 @@
 # app.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from tutor import analyze_position, format_engine_summary, llm_explain
 
@@ -8,7 +10,7 @@ app = FastAPI(title="GPT + Stockfish Chess Tutor")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 배포 시 필요 도메인만 허용 권장
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -24,10 +26,12 @@ class AnalyzeResponse(BaseModel):
     summary: str
     explanation: str
 
-@app.get("/")
+# ✅ 루트에서 바로 index.html 반환
+@app.get("/", include_in_schema=False)
 def root():
-    return {"ok": True, "tip": "Open /docs for API UI"}
+    return FileResponse("static/index.html")
 
+# 분석 API
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze(req: AnalyzeRequest):
     res = analyze_position(req.fen, req.played_san, req.depth, req.multipv)
@@ -35,5 +39,5 @@ def analyze(req: AnalyzeRequest):
     explanation = llm_explain(summary, level=req.level)
     return AnalyzeResponse(summary=summary, explanation=explanation)
 
-from fastapi.staticfiles import StaticFiles
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+# 정적파일은 /static 경로로 제공 (이미지/추가 자원 대비)
+app.mount("/static", StaticFiles(directory="static"), name="static")
