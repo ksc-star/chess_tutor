@@ -2,55 +2,121 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>GPT + Stockfish Chess Tutor</title>
-  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <!-- chessboard.js + chess.js -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chess.js@0.12.0/chess.min.js"></script>
   <style>
-    body { font-family: Arial; text-align: center; padding: 20px; }
-    #board { width: 400px; margin: auto; }
-    textarea { width: 80%; height: 120px; margin-top: 20px; }
+    :root{--w:440px}
+    body{font-family:-apple-system,Arial,'Noto Sans KR',sans-serif;margin:0;padding:16px;max-width:1100px}
+    h2{margin:0 0 8px}
+    #board{width:var(--w);max-width:92vw;margin:8px auto}
+    .pill{display:inline-block;background:#f4f5f7;border-radius:999px;padding:6px 10px;font-size:12px;color:#555}
+    .controls{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:8px 0 16px}
+    button,select{padding:8px 12px;font-size:14px}
+    .row{display:flex;gap:16px;flex-wrap:wrap}
+    .panel{flex:1 1 360px}
+    textarea{width:100%;min-height:140px}
+    footer{margin-top:10px;text-align:center;font-size:12px;color:#666}
   </style>
 </head>
 <body>
   <h2>♟ GPT + Stockfish Chess Tutor</h2>
+  <div class="pill">말을 드래그해 수를 두고, “이 위치 분석하기”를 누르세요.</div>
+
   <div id="board"></div>
-  <button id="analyzeBtn">이 위치 분석하기</button>
-  <h3>엔진 요약</h3>
-  <textarea id="summary" readonly></textarea>
-  <h3>GPT 해설</h3>
-  <textarea id="explanation" readonly></textarea>
 
-  <script>
-    const board = Chessboard('board', { draggable: true, position: 'start' });
-    const game = new Chess();
+  <div class="controls">
+    <button id="startBtn">초기화</button>
+    <button id="undoBtn">되돌리기</button>
+    <select id="levelSel">
+      <option value="beginner" selected>설명: 초급</option>
+      <option value="intermediate">설명: 중급</option>
+      <option value="advanced">설명: 고급</option>
+    </select>
+    <button id="analyzeBtn">이 위치 분석하기</button>
+  </div>
 
-    board.onDrop = function(source, target) {
-      const move = game.move({from: source, to: target, promotion: 'q'});
-      if (move === null) return 'snapback';
-      return undefined;
+  <div class="row">
+    <div class="panel">
+      <h3>엔진 요약</h3>
+      <textarea id="summary" readonly></textarea>
+    </div>
+    <div class="panel">
+      <h3>GPT 해설</h3>
+      <textarea id="explain" readonly></textarea>
+    </div>
+  </div>
+
+  <footer>
+    현재 FEN: <span id="fenTxt" class="pill"></span>
+  </footer>
+
+<script>
+  // 게임/보드 초기화
+  const game = new Chess();
+  const board = Chessboard('board', {
+    position: 'start',
+    draggable: true,
+    pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
+    onDrop: (from, to) => {
+      const move = game.move({ from, to, promotion: 'q' });
+      if (!move) return 'snapback';
+      board.position(game.fen());
+      refreshFen();
+    }
+  });
+
+  function refreshFen(){ document.getElementById('fenTxt').textContent = game.fen(); }
+  refreshFen();
+
+  // 버튼 핸들러
+  document.getElementById('startBtn').onclick = () => { game.reset(); board.start(); refreshFen(); };
+  document.getElementById('undoBtn').onclick  = () => { game.undo(); board.position(game.fen()); refreshFen(); };
+
+  // API 호출 유틸: 우선 /analyze, 실패하면 /app/pgn 폴백
+  async function analyzePosition(payload){
+    for (const path of ['/analyze','/app/pgn']){
+      try{
+        const res = await fetch(path, {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        if(res.ok) return await res.json();
+      }catch(e){ /* try next */ }
+    }
+    throw new Error('API 호출 실패 (/analyze, /app/pgn)');
+  }
+
+  // 분석 실행
+  document.getElementById('analyzeBtn').onclick = async () => {
+    const summaryEl = document.getElementById('summary');
+    const explainEl = document.getElementById('explain');
+    const level = document.getElementById('levelSel').value;
+
+    summaryEl.value = '분석 중… (Stockfish 엔진 계산)';
+    explainEl.value = '';
+
+    const payload = {
+      fen: game.fen(),
+      played_san: null,
+      level: level,
+      depth: 14,
+      multipv: 3
     };
 
-    $('#analyzeBtn').click(async () => {
-      const fen = game.fen();
-      $("#summary").val("분석 중...");
-      $("#explanation").val("");
-      const res = await fetch("/analyze", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({
-          fen: fen,
-          played_san: null,
-          level: "beginner",
-          depth: 14,
-          multipv: 3
-        })
-      });
-      const data = await res.json();
-      $("#summary").val(data.summary);
-      $("#explanation").val(data.explanation);
-    });
-  </script>
+    try{
+      const out = await analyzePosition(payload);
+      summaryEl.value = out.summary || JSON.stringify(out,null,2);
+      explainEl.value = out.explanation || '(설명 없음)';
+    }catch(err){
+      summaryEl.value = '에러: ' + err.message;
+      explainEl.value = '';
+    }
+  };
+</script>
 </body>
 </html>
