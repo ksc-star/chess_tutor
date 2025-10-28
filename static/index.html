@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>GPT + Stockfish Chess Tutor</title>
 
-  <!-- ✅ 로컬 서빙: 외부 CDN 안 씀 -->
-  <link rel="stylesheet" href="/static/vendor/chessboard-1.0.0.min.css" />
-  <script src="/static/vendor/chess.umd.min.js"></script>
-  <script src="/static/vendor/chessboard-1.0.0.min.js"></script>
+  <!-- ✅ 로컬 파일 (상대 경로). 정적 루트(/)로 마운트했으니 'vendor/...' 만 쓰면 됨 -->
+  <link rel="stylesheet" href="vendor/chessboard-1.0.0.min.css" />
+  <script src="vendor/chess.umd.min.js"></script>
+  <script src="vendor/chessboard-1.0.0.min.js"></script>
 
   <style>
     :root { --w: 440px; }
@@ -56,7 +56,6 @@
 
   <script>
     window.addEventListener('DOMContentLoaded', () => {
-      // 로컬 chess.js(UMD) 로딩 확인
       if (typeof window.Chess !== 'function') {
         document.body.insertAdjacentHTML(
           'beforeend',
@@ -69,7 +68,6 @@
       const board = Chessboard('board', {
         position: 'start',
         draggable: true,
-        // 필요하면 말 이미지도 로컬로 넣을 수 있음. 지금은 기본 스프라이트 사용.
         onDrop: (from, to) => {
           const move = game.move({ from, to, promotion: 'q' });
           if (!move) return 'snapback';
@@ -84,14 +82,10 @@
       refreshFen();
 
       document.getElementById('startBtn').onclick = () => {
-        game.reset();
-        board.start();
-        refreshFen();
+        game.reset(); board.start(); refreshFen();
       };
       document.getElementById('undoBtn').onclick = () => {
-        game.undo();
-        board.position(game.fen());
-        refreshFen();
+        game.undo(); board.position(game.fen()); refreshFen();
       };
 
       async function callAPI(payload) {
