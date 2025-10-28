@@ -1,8 +1,6 @@
-# app.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from tutor import analyze_position, format_engine_summary, llm_explain
 
@@ -26,12 +24,7 @@ class AnalyzeResponse(BaseModel):
     summary: str
     explanation: str
 
-# ✅ 루트에서 바로 index.html 반환
-@app.get("/", include_in_schema=False)
-def root():
-    return FileResponse("static/index.html")
-
-# 분석 API
+# 분석 API (POST만 쓰므로 StaticFiles와 충돌 없음)
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze(req: AnalyzeRequest):
     res = analyze_position(req.fen, req.played_san, req.depth, req.multipv)
@@ -39,5 +32,5 @@ def analyze(req: AnalyzeRequest):
     explanation = llm_explain(summary, level=req.level)
     return AnalyzeResponse(summary=summary, explanation=explanation)
 
-# 정적파일은 /static 경로로 제공 (이미지/추가 자원 대비)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# ✅ 정적 파일을 루트에 마운트 (index.html 자동 노출)
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
