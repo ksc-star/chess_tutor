@@ -5,50 +5,23 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>GPT + Stockfish Chess Tutor</title>
 
-  <!-- ✅ chess.js (UMD: 전역 window.Chess 제공) -->
-  <script src="https://cdn.jsdelivr.net/npm/chess.js@1.0.0/dist/chess.umd.min.js"></script>
-
-  <!-- ✅ chessboard.js -->
-  <link rel="stylesheet"
-        href="https://cdn.jsdelivr.net/npm/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+  <!-- ✅ 로컬 서빙: 외부 CDN 안 씀 -->
+  <link rel="stylesheet" href="/static/vendor/chessboard-1.0.0.min.css" />
+  <script src="/static/vendor/chess.umd.min.js"></script>
+  <script src="/static/vendor/chessboard-1.0.0.min.js"></script>
 
   <style>
     :root { --w: 440px; }
-    body {
-      font-family: -apple-system, Arial, 'Noto Sans KR', sans-serif;
-      margin: 0;
-      padding: 16px;
-      max-width: 1100px;
-    }
-    h2 { margin: 0 0 8px; }
-    #board {
-      width: var(--w);
-      max-width: 92vw;
-      margin: 12px auto;
-      border: 1px solid #e5e7eb;
-      border-radius: 6px;
-    }
-    .pill {
-      display: inline-block;
-      background: #f4f5f7;
-      border-radius: 999px;
-      padding: 6px 10px;
-      font-size: 12px;
-      color: #555;
-    }
-    .controls {
-      display: flex;
-      gap: 8px;
-      justify-content: center;
-      flex-wrap: wrap;
-      margin: 8px 0 16px;
-    }
-    button, select { padding: 8px 12px; font-size: 14px; }
-    .row { display: flex; gap: 16px; flex-wrap: wrap; }
-    .panel { flex: 1 1 360px; }
-    textarea { width: 100%; min-height: 140px; }
-    footer { margin-top: 10px; text-align: center; font-size: 12px; color: #666; }
+    body { font-family: -apple-system, Arial, 'Noto Sans KR', sans-serif; margin:0; padding:16px; max-width:1100px; }
+    h2 { margin:0 0 8px; }
+    #board { width: var(--w); max-width:92vw; margin:12px auto; border:1px solid #e5e7eb; border-radius:6px; }
+    .pill { display:inline-block; background:#f4f5f7; border-radius:999px; padding:6px 10px; font-size:12px; color:#555; }
+    .controls { display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin:8px 0 16px; }
+    button, select { padding:8px 12px; font-size:14px; }
+    .row { display:flex; gap:16px; flex-wrap:wrap; }
+    .panel { flex:1 1 360px; }
+    textarea { width:100%; min-height:140px; }
+    footer { margin-top:10px; text-align:center; font-size:12px; color:#666; }
   </style>
 </head>
 <body>
@@ -83,11 +56,11 @@
 
   <script>
     window.addEventListener('DOMContentLoaded', () => {
-      // ✅ chess.js 로딩 확인
+      // 로컬 chess.js(UMD) 로딩 확인
       if (typeof window.Chess !== 'function') {
         document.body.insertAdjacentHTML(
           'beforeend',
-          "<p style='color:#c00;text-align:center;'>보드 로딩 오류: chess.js 로드를 실패했습니다.</p>"
+          "<p style='color:#c00;text-align:center;'>보드 로딩 오류: 로컬 chess.js(UMD) 로드를 실패했습니다.</p>"
         );
         return;
       }
@@ -96,7 +69,7 @@
       const board = Chessboard('board', {
         position: 'start',
         draggable: true,
-        pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
+        // 필요하면 말 이미지도 로컬로 넣을 수 있음. 지금은 기본 스프라이트 사용.
         onDrop: (from, to) => {
           const move = game.move({ from, to, promotion: 'q' });
           if (!move) return 'snapback';
