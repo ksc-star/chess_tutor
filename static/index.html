@@ -5,9 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>GPT + Stockfish Chess Tutor</title>
 
-  <!-- ✅ 로컬 파일 (상대 경로). 정적 루트(/)로 마운트했으니 'vendor/...' 만 쓰면 됨 -->
+  <!-- 보드 UI만 로드 (로컬 파일) -->
   <link rel="stylesheet" href="vendor/chessboard-1.0.0.min.css" />
-  <script src="vendor/chess.umd.min.js"></script>
   <script src="vendor/chessboard-1.0.0.min.js"></script>
 
   <style>
@@ -26,7 +25,7 @@
 </head>
 <body>
   <h2>♟ GPT + Stockfish Chess Tutor</h2>
-  <div class="pill">말을 드래그해 수를 두고, “이 위치 분석하기”를 누르세요.</div>
+  <div class="pill">말을 드래그해 수를 두면 서버가 합법수 판단과 FEN 갱신을 해줍니다.</div>
 
   <div id="board"></div>
 
@@ -55,78 +54,87 @@
   <footer>현재 FEN: <span id="fenTxt" class="pill"></span></footer>
 
   <script>
-    window.addEventListener('DOMContentLoaded', () => {
-      if (typeof window.Chess !== 'function') {
-        document.body.insertAdjacentHTML(
-          'beforeend',
-          "<p style='color:#c00;text-align:center;'>보드 로딩 오류: 로컬 chess.js(UMD) 로드를 실패했습니다.</p>"
-        );
-        return;
-      }
+    // 표준 시작 FEN
+    const START_FEN = "rn1qkbnr/pppb1ppp/4p3/3p4/3P4/2N1PN2/PPP2PPP/R1BQKB1R b KQkq - 2 5"; // <- 원래: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    // 위 줄은 예시입니다. 일반 시작판 사용하려면 아래 라인을 쓰세요:
+    // const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
-      const game = new window.Chess();
-      const board = Chessboard('board', {
-        position: 'start',
-        draggable: true,
-        onDrop: (from, to) => {
-          const move = game.move({ from, to, promotion: 'q' });
-          if (!move) return 'snapback';
-          board.position(game.fen());
-          refreshFen();
-        },
-      });
+    let fen = START_FEN;
+    const fenHistory = [fen];
 
-      function refreshFen() {
-        document.getElementById('fenTxt').textContent = game.fen();
-      }
-      refreshFen();
-
-      document.getElementById('startBtn').onclick = () => {
-        game.reset(); board.start(); refreshFen();
-      };
-      document.getElementById('undoBtn').onclick = () => {
-        game.undo(); board.position(game.fen()); refreshFen();
-      };
-
-      async function callAPI(payload) {
-        for (const path of ['/analyze', '/app/pgn']) {
-          try {
-            const res = await fetch(path, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload),
-            });
-            if (res.ok) return await res.json();
-          } catch (e) {}
-        }
-        throw new Error('API 호출 실패');
-      }
-
-      document.getElementById('analyzeBtn').onclick = async () => {
-        const summaryEl = document.getElementById('summary');
-        const explainEl = document.getElementById('explain');
-        const level = document.getElementById('levelSel').value;
-        summaryEl.value = '분석 중… (Stockfish 엔진 계산)';
-        explainEl.value = '';
-
-        const payload = {
-          fen: game.fen(),
-          played_san: null,
-          level: level,
-          depth: 14,
-          multipv: 3,
-        };
-
+    const board = Chessboard('board', {
+      position: 'start',
+      draggable: true,
+      onDrop: async (from, to) => {
+        // 프로모션 간단 처리: 기본적으로 퀸 승진
+        const uci = from + to + (to[1] === '8' && from[1] === '7' ? 'q' : (to[1] === '1' && from[1] === '2' ? 'q' : ''));
         try {
-          const out = await callAPI(payload);
-          summaryEl.value = out.summary || JSON.stringify(out, null, 2);
-          explainEl.value = out.explanation || '(설명 없음)';
-        } catch (err) {
-          summaryEl.value = '에러: ' + err.message;
-          explainEl.value = '';
+          const res = await fetch('/move', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ fen, uci })
+          });
+          const data = await res.json();
+          if (!data.ok) return 'snapback';
+          fen = data.fen;
+          fenHistory.push(fen);
+          board.position(fen);
+          refreshFen();
+        } catch {
+          return 'snapback';
         }
-      };
+      }
     });
+
+    function refreshFen() {
+      document.getElementById('fenTxt').textContent = fen;
+    }
+    // 시작판 보이기
+    board.start();
+    refreshFen();
+
+    document.getElementById('startBtn').onclick = () => {
+      fen = START_FEN;
+      fenHistory.length = 0; fenHistory.push(fen);
+      board.start();
+      refreshFen();
+    };
+
+    document.getElementById('undoBtn').onclick = () => {
+      if (fenHistory.length <= 1) return;
+      fenHistory.pop();
+      fen = fenHistory[fenHistory.length - 1];
+      board.position(fen);
+      refreshFen();
+    };
+
+    async function callAnalyze(payload) {
+      const res = await fetch('/analyze', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error('API 호출 실패');
+      return await res.json();
+    }
+
+    document.getElementById('analyzeBtn').onclick = async () => {
+      const summaryEl = document.getElementById('summary');
+      const explainEl = document.getElementById('explain');
+      const level = document.getElementById('levelSel').value;
+
+      summaryEl.value = '분석 중… (Stockfish 엔진 계산)';
+      explainEl.value = '';
+
+      try {
+        const out = await callAnalyze({ fen, played_san: null, level, depth: 14, multipv: 3 });
+        summaryEl.value = out.summary || JSON.stringify(out, null, 2);
+        explainEl.value = out.explanation || '(설명 없음)';
+      } catch (e) {
+        summaryEl.value = '에러: ' + e.message;
+        explainEl.value = '';
+      }
+    };
   </script>
 </body>
 </html>
