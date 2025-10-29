@@ -2,95 +2,113 @@ import os
 import shutil
 import chess
 import chess.engine
-from typing import Optional, Dict, Any, List
 
-def _resolve_stockfish_path() -> str:
+# ----- 커스텀 예외 -----
+class EngineNotFound(RuntimeError):
+    pass
+
+def _find_stockfish_path() -> str:
     """
     우선순위:
-    1) 환경변수 STOCKFISH_PATH (절대경로 또는 실행파일명)
-    2) which('stockfish')
-    3) 리눅스 기본 설치 경로 /usr/games/stockfish
+      1) env STOCKFISH_PATH
+      2) /usr/games/stockfish
+      3) PATH 내 'stockfish'
     """
-    cand: List[str] = []
-    env = os.getenv("STOCKFISH_PATH", "").strip()
-    if env:
-        cand.append(env)
-    found = shutil.which("stockfish")
-    if found:
-        cand.append(found)
-    cand.append("/usr/games/stockfish")
+    cand = os.environ.get("STOCKFISH_PATH")
+    if cand and os.path.exists(cand):
+        return cand
 
-    for p in cand:
-        if shutil.which(p) or os.path.isfile(p):
-            return p
-    raise FileNotFoundError(f"Tried: {cand}")
+    if os.path.exists("/usr/games/stockfish"):
+        return "/usr/games/stockfish"
+
+    which = shutil.which("stockfish")
+    if which:
+        return which
+
+    raise EngineNotFound(
+        "Stockfish 바이너리를 찾지 못했습니다. (env STOCKFISH_PATH, "
+        "/usr/games/stockfish, PATH 모두 확인 실패)"
+    )
+
+def _score_to_dict(score: chess.engine.PovScore) -> dict:
+    # CP 또는 mate 둘 중 하나만 채움
+    if score.is_mate():
+        return {"score_cp": None, "score_mate": score.mate()}
+    else:
+        # None 가능성 대비
+        try:
+            cp = score.white().score(mate_score=100000)
+        except Exception:
+            cp = None
+        return {"score_cp": cp, "score_mate": None}
 
 def analyze_position(
     fen: str,
-    played_san: Optional[str],
+    played_san: str | None,
     depth: int = 16,
     multipv: int = 1,
-) -> Dict[str, Any]:
+) -> dict:
     """
-    FEN을 받아 Stockfish 분석 결과를 dict로 반환.
+    반환 형식:
+    {
+      "best_san": "e4",
+      "best_uci": "e2e4",
+      "lines": [
+         {"san":"e4","uci":"e2e4","score_cp":34,"score_mate":null}, ...
+      ],
+      "engine": "Stockfish 17.1"
+    }
     """
-    engine_path = _resolve_stockfish_path()
+    engine_path = _find_stockfish_path()
 
     board = chess.Board(fen=fen)
 
-    # 사용자가 방금 둔 수(옵션) 반영
+    # 사용자가 직전에 둔 수가 있으면 적용(옵션)
     if played_san:
         try:
-            board.push_san(played_san)
-        except Exception as e:
-            raise ValueError(f"Invalid SAN move '{played_san}': {e}")
+            move = board.parse_san(played_san)
+            board.push(move)
+        except Exception:
+            # 무시하고 그대로 진행
+            pass
 
-    limit = chess.engine.Limit(depth=max(1, int(depth)))
-    mpv = max(1, int(multipv))
-
-    out: Dict[str, Any] = {
-        "fen_after": board.fen(),
-        "depth": int(depth),
-        "multipv": int(multipv),
-        "lines": [],
-    }
-
+    # 분석
     with chess.engine.SimpleEngine.popen_uci(engine_path) as eng:
-        info = eng.analyse(board, limit, multipv=mpv)
-        # python-chess는 multipv>1 이면 list, 아니면 dict
-        infos = info if isinstance(info, list) else [info]
+        # 엔진 이름 가져오기
+        eng_name = eng.id.get("name", "Stockfish")
+        # multipv는 최소 1
+        mpv = max(1, int(multipv))
+        limit = chess.engine.Limit(depth=max(1, int(depth)))
 
-        for i, inf in enumerate(infos, start=1):
-            move = inf.get("pv", [None])[0]
-            uci = move.uci() if move else None
-            san = board.san(move) if move else None
+        info_list = eng.analyse(board, limit, multipv=mpv)
 
-            score = inf.get("score")
-            cp = score.white().score(mate_score=10_000) if score else None
-            mate = score.white().mate() if score else None
+    # python-chess가 multipv=1일 땐 dict, 그 이상은 list를 줄 수 있으므로 통일
+    if isinstance(info_list, dict):
+        info_list = [info_list]
 
-            out["lines"].append(
-                {
-                    "multipv": i,
-                    "bestmove_uci": uci,
-                    "bestmove_san": san,
-                    "cp": cp,     # +는 백 유리
-                    "mate": mate, # mate in N (양수=백 메이트)
-                    "pv_san": [board.san(m) for m in inf.get("pv", [])] if inf.get("pv") else [],
-                }
-            )
-    return out
+    # PV들을 san/uci로 정리
+    lines = []
+    for i in info_list:
+        pv = i.get("pv", [])
+        if not pv:
+            continue
+        first_move = pv[0]
+        san = board.san(first_move)
+        uci = first_move.uci()
+        sc = i.get("score")
+        lines.append({
+            "san": san,
+            "uci": uci,
+            **(_score_to_dict(sc) if sc else {"score_cp": None, "score_mate": None})
+        })
 
-def format_engine_summary(res: Dict[str, Any]) -> str:
-    if not res.get("lines"):
-        return "No engine lines."
-    top = res["lines"][0]
-    if top.get("mate") is not None:
-        eval_str = f"Mate in {top['mate']}"
-    elif top.get("cp") is not None:
-        # 100cp ≒ 1 pawn
-        eval_str = f"{top['cp']/100:.2f} pawns"
-    else:
-        eval_str = "N/A"
-    move_str = top.get("bestmove_san") or top.get("bestmove_uci") or "?"
-    return f"Depth {res['depth']}, best: {move_str}, eval: {eval_str}"
+    if not lines:
+        raise RuntimeError("엔진이 합법 수를 반환하지 않았습니다.")
+
+    best = lines[0]
+    return {
+        "best_san": best["san"],
+        "best_uci": best["uci"],
+        "lines": lines,
+        "engine": eng_name,
+    }
