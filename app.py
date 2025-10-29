@@ -1,12 +1,10 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List
-import tutor
+from tutor import analyze_position, format_engine_summary, llm_explain  # tutor.py에 존재
 
 app = FastAPI(title="GPT + Stockfish Chess Tutor")
 
-# CORS (필요시)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,43 +12,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------- Health check ----------
+# ---- health check ----
 @app.get("/ping")
 def ping():
     return {"ok": True}
 
-# ---------- 요청/응답 스키마 ----------
+# ---- analyze API ----
 class AnalyzeRequest(BaseModel):
     fen: str
-    played_san: Optional[str] = None
-    depth: int = 16
+    played_san: str | None = None
+    depth: int = 14
     multipv: int = 1
 
-class Line(BaseModel):
-    san: str
-    uci: str
-    score_cp: Optional[int] = None
-    score_mate: Optional[int] = None
-
-class AnalyzeResponse(BaseModel):
-    best_san: str
-    best_uci: str
-    lines: List[Line]
-    engine: str
-
-# ---------- 분석 API ----------
-@app.post("/analyze", response_model=AnalyzeResponse)
+@app.post("/analyze")
 def analyze(req: AnalyzeRequest):
-    try:
-        info = tutor.analyze_position(
-            fen=req.fen,
-            played_san=req.played_san,
-            depth=req.depth,
-            multipv=req.multipv,
-        )
-        return AnalyzeResponse(**info)
-    except tutor.EngineNotFound as e:
-        # 사용성 위해 명확한 500 메시지
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"analyze failed: {e}")
+    info = analyze_position(
+        fen=req.fen,
+        played_san=req.played_san,
+        depth=req.depth,
+        multipv=req.multipv,
+    )
+    return {
+        "summary": format_engine_summary(info),
+        "info": info,
+    }
+
+# 선택: 간단 LLM 설명 (키가 있을 때만 내부에서 사용)
+class ExplainRequest(BaseModel):
+    fen: str
+    best_san: str
+
+@app.post("/explain")
+def explain(req: ExplainRequest):
+    return {"text": llm_explain(req.fen, req.best_san)}
