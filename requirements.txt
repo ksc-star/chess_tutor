@@ -1,4 +1,4 @@
-fastapi
-uvicorn
-python-chess
-openai
+fastapi==0.115.3
+uvicorn[standard]==0.32.0
+python-chess==1.999
+pydantic==2.9.2
