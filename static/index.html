@@ -1,126 +1,135 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>GPT + Stockfish Chess Tutor</title>
 
-  <!-- chessboard.js만 사용 -->
-  <link rel="stylesheet"
-        href="https://cdnjs.cloudflare.com/ajax/libs/chessboard.js/1.0.0/chessboard-1.0.0.min.css" />
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/chessboard.js/1.0.0/chessboard-1.0.0.min.js"></script>
+  <!-- chessboard.css (FastAPI가 /static으로 서빙) -->
+  <link rel="stylesheet" href="/static/chessboard-1.0.0.min.css">
 
   <style>
-    :root { --w: 440px; }
-    body { font-family: -apple-system, Arial, 'Noto Sans KR', sans-serif; margin:0; padding:16px; max-width:1100px; }
-    h2 { margin:0 0 8px; }
-    #board { width: var(--w); max-width:92vw; margin:12px auto; border:1px solid #e5e7eb; border-radius:6px; }
-    .pill { display:inline-block; background:#f4f5f7; border-radius:999px; padding:6px 10px; font-size:12px; color:#555; }
-    .controls { display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin:8px 0 16px; }
-    button, select { padding:8px 12px; font-size:14px; }
-    .row { display:flex; gap:16px; flex-wrap:wrap; }
-    .panel { flex:1 1 360px; }
-    textarea { width:100%; min-height:140px; }
-    footer { margin-top:10px; text-align:center; font-size:12px; color:#666; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; }
+    header { text-align: center; padding: 16px 8px; font-weight: 700; font-size: 20px; }
+    .wrap {
+      max-width: 1100px; margin: 0 auto; padding: 8px 16px 24px;
+    }
+    /* 보드가 반드시 눈에 보이도록 폭을 명시합니다 */
+    #board { width: min(92vw, 480px); margin: 16px auto; }
+
+    .panes {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      max-width: 1100px;
+      margin: 12px auto 0;
+    }
+    .pane { border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; min-height: 180px; }
+    .pane h3 { margin: 4px 0 8px; font-size: 14px; color: #374151; }
+    .pane pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-size: 14px; }
+
+    .toolbar {
+      display: flex; gap: 8px; justify-content: center; margin-top: 8px; flex-wrap: wrap;
+    }
+    .btn {
+      border: 1px solid #d1d5db; background: #fff; padding: 8px 10px; border-radius: 8px; cursor: pointer;
+    }
+    .note { text-align: center; color: #6b7280; font-size: 12px; margin-top: 8px; }
   </style>
 </head>
 <body>
-  <h2>♟ GPT + Stockfish Chess Tutor</h2>
-  <div class="pill">말을 드래그해 수를 두고, “이 위치 분석하기”를 누르세요.</div>
-
-  <div id="board"></div>
-
-  <div class="controls">
-    <button id="startBtn">초기화</button>
-    <!-- chess.js를 제거했으므로 '되돌리기'는 비활성(서버 히스토리 추가 시 구현 가능) -->
-    <select id="levelSel">
-      <option value="beginner" selected>설명: 초급</option>
-      <option value="intermediate">설명: 중급</option>
-      <option value="advanced">설명: 고급</option>
-    </select>
-    <button id="analyzeBtn">이 위치 분석하기</button>
-  </div>
-
-  <div class="row">
-    <div class="panel">
-      <h3>엔진 요약</h3>
-      <textarea id="summary" readonly></textarea>
+  <header>GPT + Stockfish Chess Tutor</header>
+  <div class="wrap">
+    <div class="toolbar">
+      <button id="btn-reset" class="btn">초기화</button>
+      <button id="btn-beginner" class="btn">설명: 초급</button>
+      <button id="btn-analyze" class="btn">이 위치 분석하기</button>
     </div>
-    <div class="panel">
-      <h3>GPT 해설</h3>
-      <textarea id="explain" readonly></textarea>
+
+    <!-- 체스보드 -->
+    <div id="board"></div>
+    <div class="note">현재 FEN: <span id="fen">-</span></div>
+
+    <!-- 결과 패널 -->
+    <div class="panes">
+      <div class="pane">
+        <h3>엔진 요약</h3>
+        <pre id="engine-summary"></pre>
+      </div>
+      <div class="pane">
+        <h3>GPT 해설</h3>
+        <pre id="gpt-explain"></pre>
+      </div>
     </div>
   </div>
 
-  <footer>현재 FEN: <span id="fenTxt" class="pill"></span></footer>
+  <!-- 중요: jQuery를 chessboard.js보다 먼저 로드 -->
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+
+  <!-- chessboard.js (로컬 정적 자원) -->
+  <script src="/static/chessboard-1.0.0.min.js"></script>
 
   <script>
-    const START_FEN =
-      "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-
-    let fen = START_FEN;
-
+    // 보드 초기화: 말 이미지는 CDN에서 받아옵니다(로컬 이미지 불필요).
     const board = Chessboard('board', {
       position: 'start',
       draggable: true,
-      pieceTheme:
-        'https://cdnjs.cloudflare.com/ajax/libs/chessboard.js/1.0.0/img/chesspieces/wikipedia/{piece}.png',
-      onDrop: async (from, to) => {
-        // 1) 프로모션 없는 UCI 시도
-        let r = await postMove(from + to);
-        // 2) 실패하면 'q' 프로모션 UCI로 재시도(필요한 상황만 성공)
-        if (!r.ok) r = await postMove(from + to + 'q');
-        if (!r.ok) return 'snapback';
-
-        fen = r.fen;
-        board.position(fen);
-        updateFen();
-      }
+      pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png'
     });
 
-    function updateFen() {
-      document.getElementById('fenTxt').textContent = fen;
-    }
-    updateFen();
+    const fenEl = document.getElementById('fen');
+    const engineEl = document.getElementById('engine-summary');
+    const gptEl = document.getElementById('gpt-explain');
 
-    document.getElementById('startBtn').onclick = () => {
-      fen = START_FEN;
+    function updateFEN() {
+      try {
+        fenEl.textContent = board.fen();
+      } catch (e) {
+        fenEl.textContent = '(FEN 계산 불가)';
+      }
+    }
+    updateFEN();
+
+    document.getElementById('btn-reset').addEventListener('click', () => {
       board.start();
-      updateFen();
-    };
+      engineEl.textContent = '';
+      gptEl.textContent = '';
+      updateFEN();
+    });
 
-    async function postMove(uci) {
-      const res = await fetch('/move', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fen, uci })
-      });
-      return await res.json();
-    }
+    document.getElementById('btn-beginner').addEventListener('click', () => {
+      alert('초급 모드: 쉬운 설명으로 표시합니다.');
+    });
 
-    function setSummary(t) { document.getElementById('summary').value = t; }
-    function setExplain(t) { document.getElementById('explain').value = t; }
+    document.getElementById('btn-analyze').addEventListener('click', async () => {
+      updateFEN();
+      engineEl.textContent = '엔진 분석 중...';
+      gptEl.textContent = 'GPT 해설 생성 중...';
 
-    document.getElementById('analyzeBtn').onclick = async () => {
-      setSummary('분석 중… (Stockfish 엔진 계산)');
-      setExplain('');
-      const level = document.getElementById('levelSel').value;
       try {
         const res = await fetch('/analyze', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            fen, played_san: null, level, depth: 14, multipv: 3
+            fen: fenEl.textContent,
+            level: 'beginner',
+            depth: 14,
+            multipv: 3
           })
         });
-        const out = await res.json();
-        setSummary(out.summary || JSON.stringify(out, null, 2));
-        setExplain(out.explanation || '(설명 없음)');
-      } catch (e) {
-        setSummary('에러: ' + e.message);
-        setExplain('');
+        if (!res.ok) throw new Error('분석 요청 실패');
+        const data = await res.json();
+        engineEl.textContent = data.engine_summary || '';
+        gptEl.textContent = data.gpt_explain || '';
+      } catch (err) {
+        engineEl.textContent = '오류: ' + err.message;
+        gptEl.textContent = '';
       }
-    };
+    });
+
+    // 드래그로 말 이동 후 FEN 업데이트
+    window.addEventListener('mouseup', updateFEN);
+    window.addEventListener('touchend', updateFEN);
   </script>
 </body>
 </html>
