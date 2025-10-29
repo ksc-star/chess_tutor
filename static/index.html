@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>GPT + Stockfish Chess Tutor</title>
 
-  <!-- CDN: chessboard.js + chess.js(UMD) -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css" />
-  <script src="https://cdn.jsdelivr.net/npm/chess.js@1.0.0/dist/chess.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+  <!-- chessboard.js만 사용 -->
+  <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/chessboard.js/1.0.0/chessboard-1.0.0.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chessboard.js/1.0.0/chessboard-1.0.0.min.js"></script>
 
   <style>
     :root { --w: 440px; }
@@ -32,7 +32,7 @@
 
   <div class="controls">
     <button id="startBtn">초기화</button>
-    <button id="undoBtn">되돌리기</button>
+    <!-- chess.js를 제거했으므로 '되돌리기'는 비활성(서버 히스토리 추가 시 구현 가능) -->
     <select id="levelSel">
       <option value="beginner" selected>설명: 초급</option>
       <option value="intermediate">설명: 중급</option>
@@ -55,96 +55,72 @@
   <footer>현재 FEN: <span id="fenTxt" class="pill"></span></footer>
 
   <script>
-    window.addEventListener('DOMContentLoaded', () => {
-      if (typeof window.Chess !== 'function') {
-        alert('chess.js 로딩 실패');
-        return;
+    const START_FEN =
+      "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
+    let fen = START_FEN;
+
+    const board = Chessboard('board', {
+      position: 'start',
+      draggable: true,
+      pieceTheme:
+        'https://cdnjs.cloudflare.com/ajax/libs/chessboard.js/1.0.0/img/chesspieces/wikipedia/{piece}.png',
+      onDrop: async (from, to) => {
+        // 1) 프로모션 없는 UCI 시도
+        let r = await postMove(from + to);
+        // 2) 실패하면 'q' 프로모션 UCI로 재시도(필요한 상황만 성공)
+        if (!r.ok) r = await postMove(from + to + 'q');
+        if (!r.ok) return 'snapback';
+
+        fen = r.fen;
+        board.position(fen);
+        updateFen();
       }
-
-      // 표시용 보드 객체 (실제 수 적용/검증은 서버가 함)
-      const board = Chessboard('board', {
-        position: 'start',
-        draggable: true,
-        onDrop: handleDrop
-      });
-
-      // FEN을 보드에 반영
-      function setFen(fen) { board.position(fen); document.getElementById('fenTxt').textContent = fen; }
-      setFen(Chess().fen());
-
-      // UCI 만들기(+ 승진 q)
-      function buildUci(from, to, piece) {
-        // 승진 여부: 폰이 마지막 랭크로 이동할 때
-        const rank = to[1];
-        const isWhitePawn = piece === 'wP';
-        const isBlackPawn = piece === 'bP';
-        const promotion = (isWhitePawn && rank === '8') || (isBlackPawn && rank === '1') ? 'q' : '';
-        return `${from}${to}${promotion}`;
-      }
-
-      // 드롭 시 서버에 /move 요청해서 합법성/새 FEN 받기
-      async function handleDrop(source, target, piece) {
-        if (source === target) return 'snapback';
-        const uci = buildUci(source, target, piece);
-        const fen = document.getElementById('fenTxt').textContent || Chess().fen();
-
-        try {
-          const res = await fetch('/move', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ fen, uci })
-          });
-          const data = await res.json();
-          if (!data.ok) {
-            console.warn(data.error);
-            return 'snapback';
-          }
-          setFen(data.fen);
-        } catch (e) {
-          console.error(e);
-          return 'snapback';
-        }
-      }
-
-      document.getElementById('startBtn').onclick = () => setFen(Chess().fen());
-      document.getElementById('undoBtn').onclick = async () => {
-        // 간단한 로컬 undo (서버 보드 상태와 불일치 방지 위해 실제 게임은 다시 구성 권장)
-        alert('간단 데모에선 Undo를 지원하지 않습니다. 필요 시 서버에 move history를 추가하세요.');
-      };
-
-      async function callAnalyze(payload) {
-        for (const path of ['/analyze', '/app/pgn']) {
-          try {
-            const r = await fetch(path, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload)
-            });
-            if (r.ok) return await r.json();
-          } catch (e) {}
-        }
-        throw new Error('API 호출 실패');
-      }
-
-      document.getElementById('analyzeBtn').onclick = async () => {
-        const summaryEl = document.getElementById('summary');
-        const explainEl = document.getElementById('explain');
-        const level = document.getElementById('levelSel').value;
-        const fen = document.getElementById('fenTxt').textContent;
-
-        summaryEl.value = '분석 중… (Stockfish 엔진 계산)';
-        explainEl.value = '';
-
-        try {
-          const out = await callAnalyze({ fen, played_san: null, level, depth: 14, multipv: 3 });
-          summaryEl.value = out.summary || JSON.stringify(out, null, 2);
-          explainEl.value = out.explanation || '(설명 없음)';
-        } catch (err) {
-          summaryEl.value = '에러: ' + err.message;
-          explainEl.value = '';
-        }
-      };
     });
+
+    function updateFen() {
+      document.getElementById('fenTxt').textContent = fen;
+    }
+    updateFen();
+
+    document.getElementById('startBtn').onclick = () => {
+      fen = START_FEN;
+      board.start();
+      updateFen();
+    };
+
+    async function postMove(uci) {
+      const res = await fetch('/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fen, uci })
+      });
+      return await res.json();
+    }
+
+    function setSummary(t) { document.getElementById('summary').value = t; }
+    function setExplain(t) { document.getElementById('explain').value = t; }
+
+    document.getElementById('analyzeBtn').onclick = async () => {
+      setSummary('분석 중… (Stockfish 엔진 계산)');
+      setExplain('');
+      const level = document.getElementById('levelSel').value;
+      try {
+        const res = await fetch('/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fen, played_san: null, level, depth: 14, multipv: 3
+          })
+        });
+        const out = await res.json();
+        setSummary(out.summary || JSON.stringify(out, null, 2));
+        setExplain(out.explanation || '(설명 없음)');
+      } catch (e) {
+        setSummary('에러: ' + e.message);
+        setExplain('');
+      }
+    };
   </script>
 </body>
 </html>
