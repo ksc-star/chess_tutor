@@ -2,9 +2,9 @@ services:
   - type: web
     name: chess-gpt-tutor
     env: docker
-    plan: starter   # 무료로 시작(유휴시 슬립). 24/7 필요하면 유료 플랜 선택
+    plan: starter
     autoDeploy: true
-    healthCheckPath: /  # 또는 /docs
     envVars:
       - key: OPENAI_API_KEY
-        sync: false  # 대시보드에서 값 입력
+        sync: false
+    healthCheckPath: /ping
