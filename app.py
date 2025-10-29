@@ -2,6 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import chess  # python-chess
 from tutor import analyze_position, format_engine_summary, llm_explain
@@ -10,17 +11,17 @@ app = FastAPI(title="GPT + Stockfish Chess Tutor")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # 배포 안정화 후 자신의 도메인만 허용 권장
+    allow_origins=["*"],   # 배포 안정화 후 도메인 제한 권장
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 헬스체크/테스트용
+# ----- 헬스체크 -----
 @app.get("/ping")
 def ping():
     return {"ok": True}
 
-# ---------- 분석 API ----------
+# ----- 분석 API -----
 class AnalyzeRequest(BaseModel):
     fen: str
     played_san: str | None = None
@@ -39,10 +40,10 @@ def analyze(req: AnalyzeRequest):
     explanation = llm_explain(summary, level=req.level)
     return AnalyzeResponse(summary=summary, explanation=explanation)
 
-# ---------- 움직임 적용 API (서버가 합법성 체크 + FEN 갱신) ----------
+# ----- 움직임 적용 API -----
 class MoveRequest(BaseModel):
     fen: str
-    uci: str  # 예: "e2e4", "e7e8q"
+    uci: str  # e.g., "e2e4", "e7e8q"
 
 class MoveResponse(BaseModel):
     ok: bool
@@ -69,5 +70,11 @@ def apply_move(req: MoveRequest):
     board.push(move)
     return MoveResponse(ok=True, fen=board.fen(), san=san)
 
-# ---------- 정적 파일 서비스 (index.html 루트 노출) ----------
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+# ----- 정적 파일 -----
+# /static 경로로 정적 자원 노출
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# 루트는 index.html 반환 (정적 마운트가 라우트를 덮지 않게)
+@app.get("/")
+def root():
+    return FileResponse("static/index.html")
