@@ -1,80 +1,138 @@
 # tutor.py
-import os, shutil
-import chess, chess.engine
+import os
+import shutil
+from typing import Optional, List, Dict, Any
 
-# ----- Stockfish 실행 경로 탐색 -----
-def _stockfish_path():
-    # 우선 PATH에 있는 'stockfish'
-    if shutil.which("stockfish"):
-        return "stockfish"
-    # Debian/Ubuntu 패키지 기본 위치
-    for p in ("/usr/games/stockfish", "/usr/bin/stockfish"):
-        if os.path.exists(p):
-            return p
-    raise FileNotFoundError("Stockfish 실행 파일을 찾을 수 없습니다.")
+import chess
+import chess.engine
 
-# ----- 엔진 분석 -----
-def analyze_position(fen: str, depth: int = 16, multipv: int = 3, played_san: str | None = None):
-    board = chess.Board(fen)
-    engine_path = _stockfish_path()
-    engine = chess.engine.SimpleEngine.popen_uci(engine_path)
+# -------- Stockfish 경로 자동 결정 (환경변수 > PATH 탐색 > 리눅스 기본 경로) --------
+STOCKFISH_PATH = (
+    os.getenv("STOCKFISH_PATH")
+    or shutil.which("stockfish")
+    or "/usr/games/stockfish"
+)
+
+def _board_from_fen(fen: str) -> chess.Board:
     try:
-        info_list = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=multipv)
-    finally:
-        engine.quit()
+        return chess.Board(fen)
+    except Exception as e:
+        raise ValueError(f"Invalid FEN: {e}")
 
-    lines = []
-    for info in info_list:
-        move = info.get("pv", [None])[0]
-        score = info.get("score")
-        cp = None
-        mate = None
-        if score is not None:
-            if score.is_mate():
-                mate = score.white().mate()
+def analyze_position(
+    fen: str,
+    played_san: Optional[str] = None,
+    depth: int = 12,
+    multipv: int = 3,
+) -> Dict[str, Any]:
+    """
+    Stockfish로 현재 국면을 분석.
+    - fen: 현재 FEN
+    - played_san: 직전 착수(SAN). 없으면 None
+    - depth: 탐색 깊이
+    - multipv: 상위 후보수 (1~3 권장)
+    반환: { 'lines': [...], 'best': {...}, 'played_san': 'e4' | None, ... }
+    """
+    board = _board_from_fen(fen)
+
+    # 엔진 열기
+    try:
+        eng = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"Stockfish not found. Tried: {STOCKFISH_PATH}. "
+            "Set STOCKFISH_PATH env var or install stockfish."
+        )
+
+    try:
+        # 멀티PV 분석
+        limit = chess.engine.Limit(depth=max(1, int(depth)))
+        analysis: List[chess.engine.InfoDict] = eng.analyse(
+            board, limit=limit, multipv=max(1, int(multipv))
+        )
+
+        # 결과 정리
+        lines = []
+        best_entry = None
+        for idx, info in enumerate(analysis, start=1):
+            move_obj = info.get("pv", [None])[0]
+            if move_obj is not None:
+                san = board.san(move_obj)
             else:
-                cp = score.white().score(mate_score=100000)
-        san = board.san(move) if move else "?"
-        lines.append({"san": san, "cp": cp, "mate": mate})
-    return {"lines": lines}
+                san = None
 
-# ----- 엔진 요약 텍스트 -----
-def format_engine_summary(engine_info: dict) -> str:
-    if not engine_info or not engine_info.get("lines"):
-        return "엔진 결과가 없습니다."
-    out = []
-    for i, l in enumerate(engine_info["lines"], 1):
-        if l["mate"] is not None:
-            sc = f"Mate {l['mate']}"
-        elif l["cp"] is not None:
-            sc = f"{l['cp']} cp"
+            score = info.get("score")
+            mate = score.mate() if score else None
+            cp = score.white().score(mate_score=100000) if score else None
+
+            rec = {
+                "rank": idx,
+                "san": san,
+                "mate": mate,
+                "cp": cp,
+            }
+            lines.append(rec)
+            if idx == 1:
+                best_entry = rec
+
+        return {
+            "stockfish_path": STOCKFISH_PATH,
+            "played_san": played_san,
+            "lines": lines,
+            "best": best_entry,
+            "depth": depth,
+            "multipv": multipv,
+        }
+    finally:
+        eng.quit()
+
+def format_engine_summary(info: Dict[str, Any]) -> str:
+    """엔진 요약을 사람이 읽기 좋게 한 줄/여러 줄 문자열로 생성"""
+    lines = info.get("lines", [])
+    hdr = f"[Depth {info.get('depth')}, MultiPV {info.get('multipv')}]"
+    if not lines:
+        return hdr + " No engine lines."
+
+    parts = [hdr]
+    for rec in lines:
+        rank = rec.get("rank")
+        san = rec.get("san")
+        mate = rec.get("mate")
+        cp = rec.get("cp")
+        if mate is not None:
+            score_str = f"mate {mate}"
+        elif cp is not None:
+            score_str = f"cp {cp}"
         else:
-            sc = "N/A"
-        out.append(f"{i}. {l['san']} ({sc})")
-    return "\n".join(out)
+            score_str = "n/a"
+        parts.append(f"#{rank}: {san} ({score_str})")
+    return "\n".join(parts)
 
-# ----- GPT 해설 (키 없으면 자동 생략) -----
-def llm_explain(fen: str, engine_info: dict | None, level: str = "beginner", played_san: str | None = None) -> str:
-    key = os.getenv("OPENAI_API_KEY")
-    if not key:
-        return "OPENAI_API_KEY가 설정되어 있지 않아 GPT 해설을 생략합니다."
+# ------------------------- LLM (선택) 설명 -------------------------
+# openai 패키지 v2 스타일. 키가 없거나 오류면 문구만 반환하여 API 전체 실패를 막음.
+def llm_explain(prompt: str, level: str = "beginner") -> str:
+    """
+    GPT 설명(선택). OPENAI_API_KEY 없으면 엔진만 보여주고, 여기서 안내 문구 반환.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return "(LLM disabled: set OPENAI_API_KEY to enable explanations)"
 
     try:
-        # 최신 openai SDK
         from openai import OpenAI
-        client = OpenAI(api_key=key)
-        # 간단 프롬프트
-        engine_text = format_engine_summary(engine_info) if engine_info else "엔진 결과 없음"
-        prompt = (
-            f"FEN: {fen}\n엔진 제안 수: \n{engine_text}\n"
-            f"난이도: {level}. 체스 초보자도 이해하도록 간단히 설명하세요."
+        client = OpenAI(api_key=api_key)
+        sys_msg = (
+            "You are a concise chess tutor. Explain ideas clearly with short bullets. "
+            f"Audience level: {level}."
         )
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role": "system", "content": "You are a chess coach."},
-                      {"role": "user", "content": prompt}],
-            temperature=0.3,
+            messages=[
+                {"role": "system", "content": sys_msg},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.4,
         )
-        return resp.choices[0].message.content.strip()
+        return resp.choices[0].message.content
     except Exception as e:
-        return f"GPT 호출 실패: {e}"
+        return f"(LLM error: {e})"
