@@ -1,11 +1,11 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Any, Dict
 
-from tutor import analyze_position
+from tutor import analyze_position, format_engine_summary
 
-app = FastAPI(title="GPT + Stockfish Chess Tutor")
+app = FastAPI(title="Chess Tutor")
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,23 +21,25 @@ class AnalyzeRequest(BaseModel):
     multipv: int = 1
 
 @app.get("/ping")
-def ping():
+def ping() -> Dict[str, Any]:
     return {"ok": True}
 
-@app.get("/healthz")
-def healthz():
-    return {"status": "ok"}
-
 @app.post("/analyze")
-def analyze(req: AnalyzeRequest):
+def analyze(req: AnalyzeRequest) -> Dict[str, Any]:
     try:
-        res = analyze_position(
+        info = analyze_position(
             fen=req.fen,
             played_san=req.played_san,
             depth=req.depth,
             multipv=req.multipv,
         )
-        return res
+        return {
+            "summary": format_engine_summary(info),
+            "engine": info,
+        }
+    except FileNotFoundError as e:
+        # Stockfish 경로 문제를 500으로 명확히 노출
+        raise HTTPException(status_code=500, detail=f"Stockfish not found: {e}")
     except Exception as e:
-        # 로그에만 자세한 에러가 남고, 클라이언트에는 요약 전달
         raise HTTPException(status_code=500, detail=str(e))
+
