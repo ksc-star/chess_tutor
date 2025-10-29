@@ -1,110 +1,64 @@
 # tutor.py
-import chess, chess.engine
-from dataclasses import dataclass
-from typing import List, Optional
-from openai import OpenAI
 import os
+import chess
+import chess.engine
+from typing import List, Dict, Any
 
-STOCKFISH_PATH = "/usr/games/stockfish"  # Render 컨테이너에서 apt로 설치됨
+# --- Stockfish 세팅 ---
+STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", "stockfish")  # Dockerfile에서 apt로 설치됨
 
-@dataclass
-class Line:
-    san: str
-    uci: str
-    pv_san: List[str]
-    score_cp: Optional[int]
-    mate: Optional[int]
-
-@dataclass
-class AnalysisResult:
-    fen: str
-    side_to_move: str
-    best: Optional[Line]
-    alternatives: List[Line]
-    eval_before_cp: Optional[int]
-    eval_after_cp: Optional[int]
-    is_blunder: bool
-    cp_loss: Optional[int]
-
-def _score_to_cp_mate(score):
-    if score.is_mate(): return None, score.mate()
-    return score.white().score(), None  # 백 기준 cp
-
-def analyze_position(fen: str, played_san: Optional[str]=None, depth: int=16, multipv: int=3) -> AnalysisResult:
+def analyze_position(fen: str, played_san: str | None, depth: int = 16, multipv: int = 3) -> List[Dict[str, Any]]:
+    """python-chess로 Stockfish 분석 결과(MPV) 반환"""
     board = chess.Board(fen)
-    engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
-    engine.configure({"Threads": 2, "Hash": 256})
+    limit = chess.engine.Limit(depth=depth)
 
-    info0 = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=1)[0]
-    eval_before_cp, _ = _score_to_cp_mate(info0["score"])
+    with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as eng:
+        info = eng.analyse(board, limit, multipv=multipv)
+        # info는 리스트 또는 단일 dict 형태 -> 리스트 형태로 통일
+        if isinstance(info, dict):
+            info = [info]
 
-    infos = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=multipv)
-    lines: List[Line] = []
-    for info in infos:
-        pv = info.get("pv", [])
-        if not pv: continue
-        tmp = board.copy()
-        pv_san = []
-        for mv in pv:
-            pv_san.append(tmp.san(mv)); tmp.push(mv)
-        sc_cp, sc_mate = _score_to_cp_mate(info["score"])
-        lines.append(Line(tmp.root().san(pv[0]), pv[0].uci(), pv_san, sc_cp, sc_mate))
-    best, alts = (lines[0] if lines else None), (lines[1:] if len(lines)>1 else [])
+        out = []
+        for i in info:
+            pv = i.get("pv", [])
+            uci_line = [m.uci() for m in pv]
+            score = i.get("score")
+            cp = score.white().score(mate_score=100000) if score else None
+            out.append({
+                "uci_line": uci_line,
+                "cp": cp,
+            })
+        return out
 
-    eval_after_cp, cp_loss, is_blunder = None, None, False
-    if played_san:
-        try:
-            mv = board.parse_san(played_san); board.push(mv)
-            info1 = engine.analyse(board, chess.engine.Limit(depth=depth), multipv=1)[0]
-            eval_after_cp, _ = _score_to_cp_mate(info1["score"])
-            if eval_before_cp is not None and eval_after_cp is not None:
-                cp_loss = eval_before_cp - eval_after_cp
-                is_blunder = cp_loss >= 150
-        except Exception:
-            pass
+def format_engine_summary(results: List[Dict[str, Any]]) -> str:
+    """엔진 다변량 변형(MPV) 요약 텍스트"""
+    lines = []
+    for idx, r in enumerate(results, start=1):
+        cp = r["cp"]
+        score_str = f"{cp/100:+.2f}" if cp is not None and abs(cp) < 5000 else ("#mate" if cp else "?")
+        principal = " ".join(r["uci_line"][:6])  # 너무 길면 앞 6수만
+        lines.append(f"[{idx}] eval {score_str}  |  {principal}")
+    return "\n".join(lines) if lines else "(no engine lines)"
 
-    engine.quit()
-    side = "White" if board.turn == chess.WHITE else "Black"
-    return AnalysisResult(fen, side, best, alts, eval_before_cp, eval_after_cp, is_blunder, cp_loss)
+# --- LLM 설명 ---
+from openai import OpenAI
+_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-def format_engine_summary(a: AnalysisResult) -> str:
-    def lt(tag, line: Optional[Line]):
-        if not line: return f"{tag}: (none)"
-        ev = f"mate in {abs(line.mate)}" if line.mate is not None else f"{line.score_cp} cp"
-        return f"{tag}: {line.san} | {ev} | PV: {', '.join(line.pv_san[:6])}"
-    parts = [
-        f"Eval(before): {a.eval_before_cp} cp",
-        f"Eval(after): {a.eval_after_cp} cp" if a.eval_after_cp is not None else "",
-        f"Δeval: {a.cp_loss} cp" if a.cp_loss is not None else "",
-        lt("Best", a.best)
-    ] + [lt(f"Alt{i+1}", alt) for i, alt in enumerate(a.alternatives)]
-    if a.is_blunder: parts.append("⚠️ Possible blunder (≥150cp loss)")
-    return "\n".join(p for p in parts if p)
-
-def build_prompt(summary: str, level: str="beginner") -> str:
-    style = {
-        "beginner": "초보자에게 말하듯 쉬운 한국어로 bullet 4~6줄.",
-        "intermediate": "근거(약점, 활동성, 킹안전)를 구체적으로.",
-        "advanced": "라인 비교·구조·장기 계획 중심."
-    }.get(level, "초보자에게 말하듯 쉽게.")
-    return f"""당신은 정확한 체스 코치입니다.
-아래 엔진 요약을 바탕으로
-- 왜 최선수가 좋은지
-- (있다면) 사용자가 둔 수의 문제점
-- 다음에 기억할 원칙/패턴
-을 한국어로 설명하세요. {style}
-
-[엔진 요약]
-{summary}"""
-
-def llm_explain(summary: str, level: str="beginner", model: str="gpt-5-thinking") -> str:
-    key = os.getenv("OPENAI_API_KEY", "")
-    if not key: return "⚠️ OPENAI_API_KEY 미설정"
-    client = OpenAI(api_key=key)
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[{"role":"system","content":"You are a concise, accurate chess coach."},
-                  {"role":"user","content":build_prompt(summary, level)}],
-        temperature=0.2
-    )
-    return resp.choices[0].message.content.strip()
+def llm_explain(engine_summary: str, level: str = "beginner") -> str:
+    """엔진 요약을 독자 수준에 맞춰 자연어 설명으로 변환"""
+    prompt = f"""
+You are a chess coach. Explain these engine lines for a {level} player.
+Focus on ideas, plans, tactical motifs, and why lines are good/bad.
+Engine summary:
+{engine_summary}
+"""
+    try:
+        resp = _client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=350,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        return f"(LLM error) {e}"
