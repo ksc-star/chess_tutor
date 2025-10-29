@@ -10,10 +10,15 @@ app = FastAPI(title="GPT + Stockfish Chess Tutor")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],   # 배포 안정화 후 자신의 도메인만 허용 권장
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 헬스체크/테스트용
+@app.get("/ping")
+def ping():
+    return {"ok": True}
 
 # ---------- 분석 API ----------
 class AnalyzeRequest(BaseModel):
@@ -34,15 +39,15 @@ def analyze(req: AnalyzeRequest):
     explanation = llm_explain(summary, level=req.level)
     return AnalyzeResponse(summary=summary, explanation=explanation)
 
-# ---------- 움직임 적용 API (여기가 핵심: chess.js 불필요) ----------
+# ---------- 움직임 적용 API (서버가 합법성 체크 + FEN 갱신) ----------
 class MoveRequest(BaseModel):
-    fen: str                       # 현재 FEN
-    uci: str                       # 예: "e2e4" 또는 "e7e8q" (승진 포함)
+    fen: str
+    uci: str  # 예: "e2e4", "e7e8q"
 
 class MoveResponse(BaseModel):
     ok: bool
-    fen: str | None = None         # 적용 후 FEN
-    san: str | None = None         # 적용 수의 SAN
+    fen: str | None = None
+    san: str | None = None
     error: str | None = None
 
 @app.post("/move", response_model=MoveResponse)
@@ -64,5 +69,5 @@ def apply_move(req: MoveRequest):
     board.push(move)
     return MoveResponse(ok=True, fen=board.fen(), san=san)
 
-# ---------- 정적 파일 서비스 (index.html을 루트에 노출) ----------
+# ---------- 정적 파일 서비스 (index.html 루트 노출) ----------
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
