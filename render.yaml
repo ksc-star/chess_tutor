@@ -3,8 +3,8 @@ services:
     name: chess-gpt-tutor
     env: docker
     plan: starter
-    autoDeploy: true
+    autoDeploy: false          # 배포 충돌 방지 (수동 배포만)
+    healthCheckPath: /ping     # 앱이 200 OK 를 내는 경로
     envVars:
       - key: OPENAI_API_KEY
-        sync: false
-    healthCheckPath: /ping
+        sync: false            # 콘솔(Environment)에서 값 입력
