@@ -2,13 +2,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
-import chess  # python-chess
+
+# 외부 모듈
 from tutor import analyze_position, format_engine_summary, llm_explain
 
 app = FastAPI(title="GPT + Stockfish Chess Tutor")
 
+# CORS (브라우저 호출 가능)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,12 +18,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 헬스체크 엔드포인트 (Render가 호출) ---
-@app.get("/ping")
-def ping():
-    return {"ok": True}
+# -------- 정적 파일 서빙 --------
+# /static 경로로 정적 자원 제공
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# ---------- 분석 API ----------
+# 루트는 index.html 반환
+@app.get("/")
+def root():
+    return FileResponse("static/index.html")
+
+
+# -------- 분석 API --------
 class AnalyzeRequest(BaseModel):
     fen: str
     played_san: str | None = None
@@ -29,51 +36,39 @@ class AnalyzeRequest(BaseModel):
     depth: int = 16
     multipv: int = 3
 
-class AnalyzeResponse(BaseModel):
-    summary: str
-    explanation: str
-
-@app.post("/analyze", response_model=AnalyzeResponse)
+@app.post("/analyze")
 def analyze(req: AnalyzeRequest):
-    res = analyze_position(req.fen, req.played_san, req.depth, req.multipv)
-    summary = format_engine_summary(res)
-    explanation = llm_explain(summary, level=req.level)
-    return AnalyzeResponse(summary=summary, explanation=explanation)
+    """
+    체스 엔진 분석 + GPT 해설을 묶어서 반환.
+    tutor.py의 기존 함수들을 그대로 사용합니다.
+    """
+    # 엔진 분석
+    engine_info = analyze_position(
+        fen=req.fen,
+        depth=req.depth,
+        multipv=req.multipv,
+        played_san=req.played_san
+    )
 
-# ---------- 움직임 적용 API (브라우저 chess.js 없이 서버에서 검증) ----------
-class MoveRequest(BaseModel):
-    fen: str
-    uci: str
+    # 요약 텍스트
+    engine_summary = format_engine_summary(engine_info)
 
-class MoveResponse(BaseModel):
-    ok: bool
-    fen: str | None = None
-    san: str | None = None
-    error: str | None = None
+    # GPT 해설 (동기 함수라고 가정; 비동기라면 asyncio.run 등으로 래핑)
+    gpt_explain = llm_explain(
+        fen=req.fen,
+        engine_info=engine_info,
+        level=req.level,
+        played_san=req.played_san
+    )
 
-@app.post("/move", response_model=MoveResponse)
-def apply_move(req: MoveRequest):
-    try:
-        board = chess.Board(req.fen)
-    except Exception as e:
-        return MoveResponse(ok=False, error=f"Bad FEN: {e}")
+    return JSONResponse({
+        "fen": req.fen,
+        "engine_summary": engine_summary,
+        "gpt_explain": gpt_explain
+    })
 
-    try:
-        move = chess.Move.from_uci(req.uci)
-    except Exception as e:
-        return MoveResponse(ok=False, error=f"Bad UCI: {e}")
 
-    if move not in board.legal_moves:
-        return MoveResponse(ok=False, error="Illegal move")
-
-    san = board.san(move)
-    board.push(move)
-    return MoveResponse(ok=True, fen=board.fen(), san=san)
-
-# ---------- 정적 파일 (index.html 노출) ----------
-# 주의: 엔드포인트들이 먼저 정의되고, 그 다음에 정적 마운트/루트 응답을 둡니다.
-app.mount("/static", StaticFiles(directory="static", html=True), name="static")
-
-@app.get("/")
-def root():
-    return FileResponse("static/index.html")
+# -------- 헬스체크 --------
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
