@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>GPT + Stockfish Chess Tutor</title>
 
-  <!-- ✅ CDN 버전으로 교체 -->
+  <!-- CDN: chessboard.js + chess.js(UMD) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/chess.js@1.0.0/dist/chess.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
@@ -57,50 +57,70 @@
   <script>
     window.addEventListener('DOMContentLoaded', () => {
       if (typeof window.Chess !== 'function') {
-        document.body.insertAdjacentHTML(
-          'beforeend',
-          "<p style='color:#c00;text-align:center;'>보드 로딩 오류: chess.js를 불러올 수 없습니다.</p>"
-        );
+        alert('chess.js 로딩 실패');
         return;
       }
 
-      const game = new window.Chess();
+      // 표시용 보드 객체 (실제 수 적용/검증은 서버가 함)
       const board = Chessboard('board', {
         position: 'start',
         draggable: true,
-        onDrop: (from, to) => {
-          const move = game.move({ from, to, promotion: 'q' });
-          if (!move) return 'snapback';
-          board.position(game.fen());
-          refreshFen();
-        },
+        onDrop: handleDrop
       });
 
-      function refreshFen() {
-        document.getElementById('fenTxt').textContent = game.fen();
+      // FEN을 보드에 반영
+      function setFen(fen) { board.position(fen); document.getElementById('fenTxt').textContent = fen; }
+      setFen(Chess().fen());
+
+      // UCI 만들기(+ 승진 q)
+      function buildUci(from, to, piece) {
+        // 승진 여부: 폰이 마지막 랭크로 이동할 때
+        const rank = to[1];
+        const isWhitePawn = piece === 'wP';
+        const isBlackPawn = piece === 'bP';
+        const promotion = (isWhitePawn && rank === '8') || (isBlackPawn && rank === '1') ? 'q' : '';
+        return `${from}${to}${promotion}`;
       }
-      refreshFen();
 
-      document.getElementById('startBtn').onclick = () => {
-        game.reset();
-        board.start();
-        refreshFen();
-      };
-      document.getElementById('undoBtn').onclick = () => {
-        game.undo();
-        board.position(game.fen());
-        refreshFen();
+      // 드롭 시 서버에 /move 요청해서 합법성/새 FEN 받기
+      async function handleDrop(source, target, piece) {
+        if (source === target) return 'snapback';
+        const uci = buildUci(source, target, piece);
+        const fen = document.getElementById('fenTxt').textContent || Chess().fen();
+
+        try {
+          const res = await fetch('/move', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fen, uci })
+          });
+          const data = await res.json();
+          if (!data.ok) {
+            console.warn(data.error);
+            return 'snapback';
+          }
+          setFen(data.fen);
+        } catch (e) {
+          console.error(e);
+          return 'snapback';
+        }
+      }
+
+      document.getElementById('startBtn').onclick = () => setFen(Chess().fen());
+      document.getElementById('undoBtn').onclick = async () => {
+        // 간단한 로컬 undo (서버 보드 상태와 불일치 방지 위해 실제 게임은 다시 구성 권장)
+        alert('간단 데모에선 Undo를 지원하지 않습니다. 필요 시 서버에 move history를 추가하세요.');
       };
 
-      async function callAPI(payload) {
+      async function callAnalyze(payload) {
         for (const path of ['/analyze', '/app/pgn']) {
           try {
-            const res = await fetch(path, {
+            const r = await fetch(path, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload),
+              body: JSON.stringify(payload)
             });
-            if (res.ok) return await res.json();
+            if (r.ok) return await r.json();
           } catch (e) {}
         }
         throw new Error('API 호출 실패');
@@ -110,19 +130,13 @@
         const summaryEl = document.getElementById('summary');
         const explainEl = document.getElementById('explain');
         const level = document.getElementById('levelSel').value;
+        const fen = document.getElementById('fenTxt').textContent;
+
         summaryEl.value = '분석 중… (Stockfish 엔진 계산)';
         explainEl.value = '';
 
-        const payload = {
-          fen: game.fen(),
-          played_san: null,
-          level: level,
-          depth: 14,
-          multipv: 3,
-        };
-
         try {
-          const out = await callAPI(payload);
+          const out = await callAnalyze({ fen, played_san: null, level, depth: 14, multipv: 3 });
           summaryEl.value = out.summary || JSON.stringify(out, null, 2);
           explainEl.value = out.explanation || '(설명 없음)';
         } catch (err) {
