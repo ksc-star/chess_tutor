@@ -1,5 +1,4 @@
 import os
-import shutil
 import chess
 import chess.engine
 
@@ -31,10 +30,10 @@ def _find_stockfish_path() -> str:
         "Set env STOCKFISH_PATH or install stockfish (e.g., apt-get install stockfish)."
     )
 
-STOCKFISH_PATH = _find_stockfish_path()
+STOCKFISH_PATH = os.getenv("STOCKFISH_PATH") or "/usr/games/stockfish"
 
 # ---- 엔진 분석 ----
-def analyze_position(fen: str, played_san: str | None, depth: int = 14, multipv: int = 1):
+def analyze_position(fen: str, played_san: str | None, depth: int = 16, multipv: int = 1):
     """python-chess 엔진으로 분석 후 dict 반환"""
     with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as eng:
         board = chess.Board(fen)
