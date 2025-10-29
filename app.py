@@ -1,12 +1,14 @@
 # app.py
-from fastapi import FastAPI
+import os
+from typing import Optional, Any, Dict
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
-import traceback
 
-from tutor import analyze_position, format_engine_summary, llm_explain
+import tutor
 
 app = FastAPI(title="GPT + Stockfish Chess Tutor")
 
@@ -17,50 +19,62 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 정적 파일은 /static 에만 마운트 (API가 가려지지 않도록)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# ---------- 정적 파일 (프론트) ----------
+# 리포에 static/index.html이 있다고 가정
+if os.path.isdir("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/")
-def root():
-    return FileResponse("static/index.html")
+def root() -> Any:
+    index_path = os.path.join("static", "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return {"ok": True, "msg": "static/index.html not found"}
 
-class AnalyzeRequest(BaseModel):
-    fen: str
-    played_san: str | None = None
-    level: str = "beginner"
-    depth: int = 16
-    multipv: int = 3
-
-@app.post("/analyze")
-def analyze(req: AnalyzeRequest):
-    payload = {"fen": req.fen, "engine_summary": "", "gpt_explain": ""}
-
-    # 1) Stockfish 분석 (실패해도 서버는 200으로 에러 메시지 포함)
-    try:
-        engine_info = analyze_position(
-            fen=req.fen,
-            depth=req.depth,
-            multipv=req.multipv,
-            played_san=req.played_san
-        )
-        payload["engine_summary"] = format_engine_summary(engine_info)
-    except Exception as e:
-        payload["engine_summary"] = f"[엔진 오류] {e}\n{traceback.format_exc()}"
-
-    # 2) GPT 해설 (키가 없거나 호출 실패해도 계속 진행)
-    try:
-        gpt_text = llm_explain(
-            fen=req.fen,
-            engine_info=locals().get("engine_info"),
-            level=req.level,
-            played_san=req.played_san
-        )
-        payload["gpt_explain"] = gpt_text
-    except Exception as e:
-        payload["gpt_explain"] = f"[GPT 해설 생략] {e}"
-
-    return JSONResponse(payload)
+# ---------- 핑/헬스 ----------
+@app.get("/ping")
+def ping() -> Dict[str, Any]:
+    return {"ok": True}
 
 @app.get("/healthz")
-def healthz():
+def healthz() -> Dict[str, Any]:
     return {"status": "ok"}
+
+# ---------- 분석 API ----------
+class AnalyzeRequest(BaseModel):
+    fen: str
+    played_san: Optional[str] = None
+    level: str = "beginner"
+    depth: int = 12
+    multipv: int = 2
+
+@app.post("/analyze")
+def analyze(req: AnalyzeRequest) -> Dict[str, Any]:
+    """
+    본문: {fen, played_san?, level?, depth?, multipv?}
+    반환: {engine: {...}, summary: "...", gpt: "..."}
+    """
+    try:
+        engine_info = tutor.analyze_position(
+            fen=req.fen,
+            played_san=req.played_san,
+            depth=req.depth,
+            multipv=req.multipv,
+        )
+        summary = tutor.format_engine_summary(engine_info)
+    except Exception as e:
+        # 프론트에서 에러 메시지 표시 가능하게 반환
+        raise HTTPException(status_code=400, detail=f"engine_error: {e}")
+
+    # LLM 실패해도 전체 실패시키지 않음
+    prompt = (
+        "Summarize the position and the suggested line(s) below for a learner.\n\n"
+        + summary
+    )
+    explain = tutor.llm_explain(prompt, level=req.level)
+
+    return {
+        "engine": engine_info,
+        "summary": summary,
+        "gpt": explain,
+    }
