@@ -1,14 +1,3 @@
-알겠습니다. 계속 "Internal Server Error"가 발생하는 문제를 찾았습니다.
-
-tutor.py 코드의 evaluate_played_move 함수(방금 둔 수 평가)가 multipv=1로 스톡피시 엔진을 호출할 때, 엔진은 **단일 객체(dictionary)**를 반환합니다.
-
-하지만 현재 코드는 엔진이 **리스트(list)**를 반환한다고 가정하고 info_best[0]처럼 리스트의 첫 번째 항목에 접근하려다 TypeError가 발생하여 서버가 다운되는 것이었습니다.
-
-이 문제를 수정한 최종 tutor.py 파일입니다. 이 파일의 전체 코드로 덮어쓰기 하신 후 재배포하시면, 더 이상 "Internal Server Error"가 발생하지 않을 것입니다.
-
-tutor.py (최종 완성본 - TypeError 수정됨)
-Python
-
 import os
 import shutil
 import chess
