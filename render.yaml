@@ -2,7 +2,7 @@ services:
   - type: web
     name: chess-gpt-tutor
     env: docker
-    plan: starter
+    plan: free
     autoDeploy: false          # 배포 충돌 방지 (수동 배포만)
     healthCheckPath: /ping     # 앱이 200 OK 를 내는 경로
     envVars:
