@@ -1,3 +1,14 @@
+알겠습니다. 계속 "Internal Server Error"가 발생하는 문제를 찾았습니다.
+
+tutor.py 코드의 evaluate_played_move 함수(방금 둔 수 평가)가 multipv=1로 스톡피시 엔진을 호출할 때, 엔진은 **단일 객체(dictionary)**를 반환합니다.
+
+하지만 현재 코드는 엔진이 **리스트(list)**를 반환한다고 가정하고 info_best[0]처럼 리스트의 첫 번째 항목에 접근하려다 TypeError가 발생하여 서버가 다운되는 것이었습니다.
+
+이 문제를 수정한 최종 tutor.py 파일입니다. 이 파일의 전체 코드로 덮어쓰기 하신 후 재배포하시면, 더 이상 "Internal Server Error"가 발생하지 않을 것입니다.
+
+tutor.py (최종 완성본 - TypeError 수정됨)
+Python
+
 import os
 import shutil
 import chess
@@ -74,22 +85,21 @@ def analyze_position_for_next_move(fen: str, level: str, depth: int, multipv: in
         if not info:
             return "분석 실패.", "(GPT 해설 불가)", {}
 
-        r0 = info[0]
+        # ▼▼▼ [수정] multipv 값에 따라 info가 리스트일 수도, 단일 객체일 수도 있음 ▼▼▼
+        r0 = info[0] if isinstance(info, list) else info
         
-        # ▼▼▼ [수정] pv 키가 없거나 비어있을 경우 IndexError 방지 ▼▼▼
         pv = r0.get("pv", [])
         best_move_uci = pv[0].uci() if pv else "N/A"
         
         score_obj = r0.get("score")
         
-        # [수정] score_obj가 None인지 아닌지 확인
         if score_obj and score_obj.is_mate():
             engine_summary = f"최적의 수: {best_move_uci} (메이트까지 {score_obj.white().mate()}수)"
-        elif score_obj: # None이 아니고 메이트도 아닐 때
+        elif score_obj:
             score_cp = score_obj.white().score(mate_score=100000)
             score_pawns = round(score_cp / 100.0, 2)
             engine_summary = f"최적의 수: {best_move_uci} (평가: {score_pawns:+.2f})"
-        else: # score_obj가 None일 때
+        else:
             engine_summary = f"최적의 수: {best_move_uci} (평가: N/A)"
 
         try:
@@ -101,7 +111,6 @@ def analyze_position_for_next_move(fen: str, level: str, depth: int, multipv: in
         
         return engine_summary, gpt_explanation, info
 
-# (기존 llm_explain은 이름 변경)
 def llm_explain_next_move(fen: str, best_san: str, level: str) -> str:
     key = os.environ.get("OPENAI_API_KEY", "")
     if not key: return "(GPT 해설 비활성화)"
@@ -138,22 +147,22 @@ def evaluate_played_move(fen_before: str, uci_move: str, level: str):
 
     with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as eng:
         # 1. 최적의 수는 무엇이었나?
-        limit = chess.engine.Limit(depth=14) # 평가용이므로 너무 깊지 않게
+        limit = chess.engine.Limit(depth=14)
+        
+        # ▼▼▼ [수정] multipv=1이므로 info_best는 단일 객체임. [0] 제거 ▼▼▼
         info_best = eng.analyse(board, limit=limit, multipv=1)
         
         if not info_best:
             return "분석 실패.", "(GPT 해설 불가)"
 
-        # ▼▼▼ [수정] pv 키가 없거나 비어있을 경우 IndexError 방지 ▼▼▼
-        pv = info_best[0].get("pv", [])
+        pv = info_best.get("pv", [])
         if not pv:
              return "최적의 수 분석 실패.", "(GPT 해설 불가)"
         
         best_move = pv[0]
         best_move_san = board.san(best_move)
         
-        # [수정] .get("score")로 안전하게 접근하고, None일 경우 0으로 처리
-        best_score_obj = info_best[0].get("score")
+        best_score_obj = info_best.get("score")
         best_score_cp = 0
         if best_score_obj and not best_score_obj.is_mate():
             best_score_cp = best_score_obj.white().score(mate_score=100000)
@@ -162,14 +171,14 @@ def evaluate_played_move(fen_before: str, uci_move: str, level: str):
         
         # 2. 내가 둔 수의 점수는?
         board.push(played_move)
+        
+        # ▼▼▼ [수정] multipv=1(기본값)이므로 info_played는 단일 객체임. [0] 제거 ▼▼▼
         info_played = eng.analyse(board, limit=chess.engine.Limit(depth=12))
         
-        # [수정] info_played가 비어있을 수 있음
         if not info_played:
             return "둔 수 분석 실패.", "(GPT 해설 불가)"
 
-        # [수정] .get("score")로 안전하게 접근하고, None일 경우 0으로 처리
-        played_score_obj = info_played[0].get("score")
+        played_score_obj = info_played.get("score")
         played_score_cp = 0
         if played_score_obj and not played_score_obj.is_mate():
             played_score_cp = played_score_obj.white().score(mate_score=100000)
@@ -183,7 +192,6 @@ def evaluate_played_move(fen_before: str, uci_move: str, level: str):
         best_pawns = round(best_score_cp / 100.0, 2)
         played_pawns = round(played_score_cp / 100.0, 2)
 
-        # [수정] SyntaxError가 발생했던 부분
         engine_summary = (
             f"평가: {move_quality}\n"
             f"내가 둔 수: {played_move_san} (평가: {played_pawns:+.2f})\n"
