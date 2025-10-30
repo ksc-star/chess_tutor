@@ -10,12 +10,10 @@ def _find_stockfish_path() -> str:
     env_path = os.environ.get("STOCKFISH_PATH")
     if env_path and os.path.exists(env_path):
         return env_path
-
-    # 2) 시스템 PATH에 있는 바이너리 (Dockerfile에서 설치 시 이 방식이 유효)
+    # 2) 시스템 PATH에 있는 바이너리
     which = shutil.which("stockfish")
     if which:
         return which
-
     # 3) 리눅스 배포판에서 일반적인 설치 경로 후보
     candidates = [
         "/usr/games/stockfish",
@@ -25,19 +23,16 @@ def _find_stockfish_path() -> str:
     for p in candidates:
         if os.path.exists(p):
             return p
-
     # 4) 못 찾으면 명확한 에러 메시지
     raise FileNotFoundError(
         "Stockfish binary not found. "
         "Set env STOCKFISH_PATH or install stockfish (e.g., apt-get install stockfish)."
     )
 
-# ... (_find_stockfish_path 함수는 기존과 동일) ...
 STOCKFISH_PATH = _find_stockfish_path()
 
 # --- 도우미 함수 ---
 
-# (기존의 get_system_prompt 함수 - 중급/고급용. 없으면 여기에 추가)
 def get_system_prompt(level: str, context: str) -> str:
     level = level.lower()
     if level == "intermediate":
@@ -47,15 +42,14 @@ def get_system_prompt(level: str, context: str) -> str:
     else: # beginner
         prompt_base = "당신은 체스 초보자를 위한 친절한 체스 튜터입니다. 쉽고 명확하게 설명합니다."
 
-    if context == "explain_next": # '다음 수' 설명
+    if context == "explain_next":
         return f"{prompt_base} FEN 포지션과 엔진이 추천한 최적의 수를 받으면, 왜 그 수가 좋은지 해당 레벨에 맞게 설명합니다."
-    if context == "evaluate_move": # '둔 수' 평가
+    if context == "evaluate_move":
         return f"{prompt_base} 사용자가 방금 둔 수에 대해 평가합니다. 최적의 수와 사용자의 수를 비교하여, 왜 잘했는지 또는 실수했는지 그 이유를 해당 레벨에 맞게 설명합니다."
-    if context == "chat": # 채팅
+    if context == "chat":
         return f"{prompt_base} FEN과 사용자의 질문을 받고, 해당 레벨에 맞게 답변합니다."
     return prompt_base
 
-# 점수 차이를 "실수", "블런더" 등으로 변환
 def classify_move(score_diff: int) -> str:
     if score_diff >= -10: return "최고의 수"
     if score_diff >= -50: return "좋은 수"
@@ -63,9 +57,8 @@ def classify_move(score_diff: int) -> str:
     if score_diff >= -200: return "실수"
     return "블런더"
 
-# --- API 1: 현재 위치 분석 (기존 analyze_position) ---
+# --- API 1: 현재 위치 분석 ---
 
-# ▼▼▼ 1. 함수 이름 변경 ▼▼▼
 def analyze_position_for_next_move(fen: str, level: str, depth: int, multipv: int):
     """현재 FEN에서 "다음 최적의 수"를 분석합니다."""
     
@@ -77,29 +70,29 @@ def analyze_position_for_next_move(fen: str, level: str, depth: int, multipv: in
         if not info:
             return "분석 실패.", "(GPT 해설 불가)", {}
 
-        # (기존 format_engine_summary 로직을 여기로 가져옴)
         r0 = info[0]
         best_move_uci = r0["pv"][0].uci() if r0.get("pv") else "N/A"
         score_obj = r0.get("score")
         
-        if score_obj.is_mate():
+        # ▼▼▼ [수정] score_obj가 None인지 아닌지 확인 ▼▼▼
+        if score_obj and score_obj.is_mate():
             engine_summary = f"최적의 수: {best_move_uci} (메이트까지 {score_obj.white().mate()}수)"
-        else:
+        elif score_obj: # None이 아니고 메이트도 아닐 때
             score_cp = score_obj.white().score(mate_score=100000)
             score_pawns = round(score_cp / 100.0, 2)
             engine_summary = f"최적의 수: {best_move_uci} (평가: {score_pawns:+.2f})"
-
+        else: # score_obj가 None일 때
+            engine_summary = f"최적의 수: {best_move_uci} (평가: N/A)"
+            
         try:
             best_move_san = board.san(chess.Move.from_uci(best_move_uci))
         except:
             best_move_san = best_move_uci
 
-        # (기존 llm_explain 로직을 여기로 가져옴)
         gpt_explanation = llm_explain_next_move(fen, best_move_san, level)
         
         return engine_summary, gpt_explanation, info
 
-# (기존 llm_explain은 이름 변경)
 def llm_explain_next_move(fen: str, best_san: str, level: str) -> str:
     key = os.environ.get("OPENAI_API_KEY", "")
     if not key: return "(GPT 해설 비활성화)"
@@ -122,9 +115,8 @@ def llm_explain_next_move(fen: str, best_san: str, level: str) -> str:
     except Exception as e:
         return f"(GPT 해설 생성 중 오류: {e})"
 
-# --- API 2: 방금 둔 수 평가 (신규) ---
+# --- API 2: 방금 둔 수 평가 ---
 
-# ▼▼▼ 2. 신규 함수 evaluate_played_move 추가 ▼▼▼
 def evaluate_played_move(fen_before: str, uci_move: str, level: str):
     """사용자가 방금 둔 수를 평가합니다."""
     
@@ -137,7 +129,7 @@ def evaluate_played_move(fen_before: str, uci_move: str, level: str):
 
     with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as eng:
         # 1. 최적의 수는 무엇이었나?
-        limit = chess.engine.Limit(depth=14) # 평가용이므로 너무 깊지 않게
+        limit = chess.engine.Limit(depth=14)
         info_best = eng.analyse(board, limit=limit, multipv=1)
         
         if not info_best:
@@ -145,15 +137,26 @@ def evaluate_played_move(fen_before: str, uci_move: str, level: str):
 
         best_move = info_best[0]["pv"][0]
         best_move_san = board.san(best_move)
-        best_score_obj = info_best[0]["score"]
-        best_score_cp = best_score_obj.white().score(mate_score=100000)
+        
+        # ▼▼▼ [수정] .get("score")로 안전하게 접근하고, None일 경우 0으로 처리 ▼▼▼
+        best_score_obj = info_best[0].get("score")
+        best_score_cp = 0
+        if best_score_obj:
+            best_score_cp = best_score_obj.white().score(mate_score=100000)
         
         # 2. 내가 둔 수의 점수는?
         board.push(played_move)
         info_played = eng.analyse(board, limit=chess.engine.Limit(depth=12))
         
-        played_score_obj = info_played[0]["score"]
-        played_score_cp = played_score_obj.white().score(mate_score=100000)
+        # ▼▼▼ [수정] info_played가 비어있을 수 있음 ▼▼▼
+        if not info_played:
+            return "둔 수 분석 실패.", "(GPT 해설 불가)"
+
+        # ▼▼▼ [수정] .get("score")로 안전하게 접근하고, None일 경우 0으로 처리 ▼▼▼
+        played_score_obj = info_played[0].get("score")
+        played_score_cp = 0
+        if played_score_obj:
+            played_score_cp = played_score_obj.white().score(mate_score=100000)
 
         # 3. 비교 및 요약
         score_diff = played_score_cp - best_score_cp
@@ -164,69 +167,4 @@ def evaluate_played_move(fen_before: str, uci_move: str, level: str):
 
         engine_summary = (
             f"평가: {move_quality}\n"
-            f"내가 둔 수: {played_move_san} (평가: {played_pawns:+.2f})\n"
-            f"최적의 수: {best_move_san} (평가: {best_pawns:+.2f})"
-        )
-
-        # 4. GPT 해설 생성
-        gpt_explanation = llm_evaluate_played_move(
-            fen_before=fen_before,
-            played_move_san=played_move_san,
-            best_move_san=best_move_san,
-            move_quality=move_quality,
-            level=level
-        )
-        
-        return engine_summary, gpt_explanation
-
-# ▼▼▼ 3. '둔 수 평가'용 LLM 함수 신규 추가 ▼▼▼
-def llm_evaluate_played_move(fen_before: str, played_move_san: str, best_move_san: str, move_quality: str, level: str) -> str:
-    key = os.environ.get("OPENAI_API_KEY", "")
-    if not key: return "(GPT 해설 비활성화)"
-    
-    try:
-        client = OpenAI(api_key=key)
-        system_prompt = get_system_prompt(level, "evaluate_move")
-        user_prompt = (
-            f"포지션(FEN): {fen_before}\n"
-            f"사용자가 둔 수: {played_move_san}\n"
-            f"엔진이 추천한 최적의 수: {best_move_san}\n"
-            f"엔진 평가: {move_quality}\n\n"
-            f"왜 사용자의 수가 {move_quality}인지, 그리고 최적의 수와 비교하여 {level} 수준으로 설명해 주세요."
-        )
-
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.3, max_tokens=200
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        return f"(GPT 해설 생성 중 오류: {e})"
-
-# --- API 3: 채팅 (기존 llm_chat_response) ---
-# ▼▼▼ 4. Level 파라미터 받도록 수정 ▼▼▼
-def llm_chat_response(fen: str, question: str, level: str = "beginner") -> str:
-    key = os.environ.get("OPENAI_API_KEY", "")
-    if not key: return "(GPT 해설 비활성화)"
-
-    try:
-        client = OpenAI(api_key=key)
-        # ▼▼▼ 5. get_system_prompt 사용 ▼▼▼
-        system_prompt = get_system_prompt(level, "chat")
-        user_prompt = f"현재 포지션(FEN): {fen}\n\n사용자 질문: {question}\n\n이 질문에 대해 {level} 수준으로 답변해 주세요."
-
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.3, max_tokens=200
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        return f"(GPT 답변 생성 중 오류 발생: {e})"
+            f"내가 둔 수: {
