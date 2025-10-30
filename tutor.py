@@ -75,7 +75,11 @@ def analyze_position_for_next_move(fen: str, level: str, depth: int, multipv: in
             return "분석 실패.", "(GPT 해설 불가)", {}
 
         r0 = info[0]
-        best_move_uci = r0["pv"][0].uci() if r0.get("pv") else "N/A"
+        
+        # ▼▼▼ [수정] pv 키가 없거나 비어있을 경우 IndexError 방지 ▼▼▼
+        pv = r0.get("pv", [])
+        best_move_uci = pv[0].uci() if pv else "N/A"
+        
         score_obj = r0.get("score")
         
         # [수정] score_obj가 None인지 아닌지 확인
@@ -89,7 +93,7 @@ def analyze_position_for_next_move(fen: str, level: str, depth: int, multipv: in
             engine_summary = f"최적의 수: {best_move_uci} (평가: N/A)"
 
         try:
-            best_move_san = board.san(chess.Move.from_uci(best_move_uci))
+            best_move_san = board.san(chess.Move.from_uci(best_move_uci)) if best_move_uci != "N/A" else "N/A"
         except:
             best_move_san = best_move_uci
 
@@ -140,7 +144,12 @@ def evaluate_played_move(fen_before: str, uci_move: str, level: str):
         if not info_best:
             return "분석 실패.", "(GPT 해설 불가)"
 
-        best_move = info_best[0]["pv"][0]
+        # ▼▼▼ [수정] pv 키가 없거나 비어있을 경우 IndexError 방지 ▼▼▼
+        pv = info_best[0].get("pv", [])
+        if not pv:
+             return "최적의 수 분석 실패.", "(GPT 해설 불가)"
+        
+        best_move = pv[0]
         best_move_san = board.san(best_move)
         
         # [수정] .get("score")로 안전하게 접근하고, None일 경우 0으로 처리
