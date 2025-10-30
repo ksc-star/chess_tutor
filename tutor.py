@@ -106,3 +106,35 @@ def llm_explain(fen: str, best_san: str) -> str:
     except Exception as e:
         print(f"OpenAI API Error: {e}")
         return f"(GPT 해설 생성 중 오류 발생: {e})"
+
+def llm_chat_response(fen: str, question: str) -> str:
+    """LLM을 호출하여 FEN과 사용자의 질문에 대한 답변을 생성합니다."""
+    key = os.environ.get("OPENAI_API_KEY", "")
+    if not key:
+        return "(GPT 해설 비활성화: OPENAI_API_KEY가 설정되지 않았습니다.)"
+
+    try:
+        client = OpenAI(api_key=key)
+        
+        system_prompt = (
+            "당신은 체스 초보자를 위한 친절한 체스 튜터입니다. "
+            "체스 포지션(FEN)과 그에 대한 사용자의 질문을 받게 됩니다. "
+            "이 포지션을 기준으로 사용자의 질문에 초보자가 이해하기 쉽게 답변해 주세요."
+        )
+        
+        user_prompt = f"현재 포지션(FEN): {fen}\n\n사용자 질문: {question}"
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.3,
+            max_tokens=200,
+        )
+        return response.choices[0].message.content.strip()
+
+    except Exception as e:
+        print(f"OpenAI API Error: {e}")
+        return f"(GPT 답변 생성 중 오류 발생: {e})"
