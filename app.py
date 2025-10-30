@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles  # <-- 2. StaticFiles 임포트 추가
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from tutor import analyze_position, format_engine_summary, llm_explain
+from tutor import analyze_position, format_engine_summary, llm_explain, llm_chat_response # <-- 1. llm_chat_response 추가
 
 app = FastAPI(title="GPT + Stockfish Chess Tutor")
 
@@ -70,6 +70,18 @@ def analyze(req: AnalyzeRequest):
         "gpt_explain": gpt_explanation,   # GPT 결과 추가
         "info": info,                     # (디버깅용 상세 정보)
     }
+
+class AskRequest(BaseModel):
+    fen: str
+    question: str
+
+@app.post("/ask")
+def ask(req: AskRequest):
+    answer = llm_chat_response(
+        fen=req.fen,
+        question=req.question
+    )
+    return {"answer": answer}
 
 # 9. /explain 엔드포인트는 더 이상 필요 없으므로 삭제 (선택 사항)
 # class ExplainRequest(BaseModel):
