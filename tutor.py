@@ -146,8 +146,10 @@ def evaluate_played_move(fen_before: str, uci_move: str, level: str):
         # [수정] .get("score")로 안전하게 접근하고, None일 경우 0으로 처리
         best_score_obj = info_best[0].get("score")
         best_score_cp = 0
-        if best_score_obj:
+        if best_score_obj and not best_score_obj.is_mate():
             best_score_cp = best_score_obj.white().score(mate_score=100000)
+        elif best_score_obj and best_score_obj.is_mate():
+             best_score_cp = 100000 if best_score_obj.white().mate() > 0 else -100000
         
         # 2. 내가 둔 수의 점수는?
         board.push(played_move)
@@ -160,8 +162,10 @@ def evaluate_played_move(fen_before: str, uci_move: str, level: str):
         # [수정] .get("score")로 안전하게 접근하고, None일 경우 0으로 처리
         played_score_obj = info_played[0].get("score")
         played_score_cp = 0
-        if played_score_obj:
+        if played_score_obj and not played_score_obj.is_mate():
             played_score_cp = played_score_obj.white().score(mate_score=100000)
+        elif played_score_obj and played_score_obj.is_mate():
+            played_score_cp = 100000 if played_score_obj.white().mate() > 0 else -100000
 
         # 3. 비교 및 요약
         score_diff = played_score_cp - best_score_cp
