@@ -134,18 +134,21 @@ def evaluate_played_move(fen_before: str, uci_move: str, level: str):
     except Exception as e:
         return f"잘못된 수입니다: {uci_move}", f"(오류: {e})"
 
+    # ▼▼▼ [수정] 엔진 상태 꼬임(State Corruption) 버그를 막기 위해
+    # '두기 전'과 '둔 후'의 분석을 별개의 엔진 프로세스(with 블록)로 분리합니다.
+
+    # --- 1. '두기 전' 상태 분석 (최적의 수 찾기) ---
+    best_move_san = "N/A"
+    best_score_cp = 0
+    
     with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as eng:
-        # 1. 최적의 수는 무엇이었나?
         limit = chess.engine.Limit(depth=14)
-        
-        # ▼▼▼ [수정] multipv=1이므로 info_best는 리스트(list)입니다. [0]으로 첫 항목에 접근합니다. ▼▼▼
         info_best_list = eng.analyse(board, limit=limit, multipv=1)
         
         if not info_best_list:
             return "분석 실패.", "(GPT 해설 불가)"
         
-        info_best = info_best_list[0] # 리스트의 첫 번째 항목(딕셔너리)을 가져옴
-        # ▲▲▲ [수정] 여기까지가 수정된 부분입니다. ▲▲▲
+        info_best = info_best_list[0]
         
         pv = info_best.get("pv", [])
         if not pv:
@@ -155,51 +158,50 @@ def evaluate_played_move(fen_before: str, uci_move: str, level: str):
         best_move_san = board.san(best_move)
         
         best_score_obj = info_best.get("score")
-        best_score_cp = 0
         if best_score_obj and not best_score_obj.is_mate():
             best_score_cp = best_score_obj.white().score(mate_score=100000)
         elif best_score_obj and best_score_obj.is_mate():
              best_score_cp = 100000 if best_score_obj.white().mate() > 0 else -100000
-        
-        # 2. 내가 둔 수의 점수는?
-        board.push(played_move)
-        
-        # multipv가 없으면 info_played는 단일 객체(딕셔너리)입니다.
+
+    # --- 2. '둔 후' 상태 분석 (내가 둔 수의 점수 찾기) ---
+    board.push(played_move) # '두기 전' board 객체에 둔 수를 적용
+    played_score_cp = 0
+
+    with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as eng:
         info_played = eng.analyse(board, limit=chess.engine.Limit(depth=12))
         
         if not info_played:
             return "둔 수 분석 실패.", "(GPT 해설 불가)"
 
         played_score_obj = info_played.get("score")
-        played_score_cp = 0
         if played_score_obj and not played_score_obj.is_mate():
             played_score_cp = played_score_obj.white().score(mate_score=100000)
         elif played_score_obj and played_score_obj.is_mate():
             played_score_cp = 100000 if played_score_obj.white().mate() > 0 else -100000
 
-        # 3. 비교 및 요약
-        score_diff = played_score_cp - best_score_cp
-        move_quality = classify_move(score_diff)
-        
-        best_pawns = round(best_score_cp / 100.0, 2)
-        played_pawns = round(played_score_cp / 100.0, 2)
+    # --- 3. 비교 및 요약 ---
+    score_diff = played_score_cp - best_score_cp
+    move_quality = classify_move(score_diff)
+    
+    best_pawns = round(best_score_cp / 100.0, 2)
+    played_pawns = round(played_score_cp / 100.0, 2)
 
-        engine_summary = (
-            f"평가: {move_quality}\n"
-            f"내가 둔 수: {played_move_san} (평가: {played_pawns:+.2f})\n"
-            f"최적의 수: {best_move_san} (평가: {best_pawns:+.2f})"
-        )
+    engine_summary = (
+        f"평가: {move_quality}\n"
+        f"내가 둔 수: {played_move_san} (평가: {played_pawns:+.2f})\n"
+        f"최적의 수: {best_move_san} (평가: {best_pawns:+.2f})"
+    )
 
-        # 4. GPT 해설 생성
-        gpt_explanation = llm_evaluate_played_move(
-            fen_before=fen_before,
-            played_move_san=played_move_san,
-            best_move_san=best_move_san,
-            move_quality=move_quality,
-            level=level
-        )
-        
-        return engine_summary, gpt_explanation
+    # --- 4. GPT 해설 생성 ---
+    gpt_explanation = llm_evaluate_played_move(
+        fen_before=fen_before,
+        played_move_san=played_move_san,
+        best_move_san=best_move_san,
+        move_quality=move_quality,
+        level=level
+    )
+    
+    return engine_summary, gpt_explanation
 
 # '둔 수 평가'용 LLM 함수 신규 추가
 def llm_evaluate_played_move(fen_before: str, played_move_san: str, best_move_san: str, move_quality: str, level: str) -> str:
