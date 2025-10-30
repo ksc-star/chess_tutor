@@ -145,6 +145,7 @@ def evaluate_played_move(fen_before: str, uci_move: str, level: str):
             return "분석 실패.", "(GPT 해설 불가)"
         
         info_best = info_best_list[0] # 리스트의 첫 번째 항목(딕셔너리)을 가져옴
+        # ▲▲▲ [수정] 여기까지가 수정된 부분입니다. ▲▲▲
         
         pv = info_best.get("pv", [])
         if not pv:
@@ -163,7 +164,7 @@ def evaluate_played_move(fen_before: str, uci_move: str, level: str):
         # 2. 내가 둔 수의 점수는?
         board.push(played_move)
         
-        # ▼▼▼ [수정] multipv가 없으면 info_played는 단일 객체(딕셔너리)입니다. [0]이 필요 없습니다. ▼▼▼
+        # multipv가 없으면 info_played는 단일 객체(딕셔너리)입니다.
         info_played = eng.analyse(board, limit=chess.engine.Limit(depth=12))
         
         if not info_played:
