@@ -79,33 +79,44 @@
   <!-- chessboard.js -->
   <script src="/static/chessboard-1.0.0.min.js"></script>
 
-  <script>
+<script>
     const board = Chessboard('board', {
       position: 'start',
       draggable: true,
       pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png'
     });
 
+    // 1. Element들 미리 찾아두기
     const fenEl = document.getElementById('fen');
     const engineEl = document.getElementById('engine-summary');
     const gptEl = document.getElementById('gpt-explain');
+    const chatLog = document.getElementById('chat-log'); // chat-log도 추가
+    const chatInput = document.getElementById('chat-input'); // chat-input도 추가
 
+    // 2. FEN 업데이트 함수
     function updateFEN() {
       try { fenEl.textContent = board.fen(); }
       catch { fenEl.textContent = '(FEN 계산 불가)'; }
     }
-    updateFEN();
+    updateFEN(); // 처음 한 번 실행
     window.addEventListener('mouseup', updateFEN);
     window.addEventListener('touchend', updateFEN);
 
+    // 3. '초기화' 버튼
     document.getElementById('btn-reset').addEventListener('click', () => {
-      board.start(); engineEl.textContent = ''; gptEl.textContent = ''; updateFEN();
+      board.start();
+      engineEl.textContent = '';
+      gptEl.textContent = '';
+      chatLog.textContent = ''; // 채팅 로그 비우기 추가
+      updateFEN();
     });
 
+    // 4. '설명: 초급' 버튼
     document.getElementById('btn-beginner').addEventListener('click', () => {
       alert('초급 모드: 쉬운 설명으로 표시합니다.');
     });
 
+    // 5. '이 위치 분석하기' 버튼
     document.getElementById('btn-analyze').addEventListener('click', async () => {
       updateFEN();
       engineEl.textContent = '엔진 분석 중...';
@@ -120,7 +131,6 @@
           })
         });
 
-        // 서버는 항상 200으로 에러 사유를 JSON에 실어 보냅니다.
         const data = await res.json();
         engineEl.textContent = data.engine_summary || '';
         gptEl.textContent = data.gpt_explain || '';
@@ -128,6 +138,40 @@
         engineEl.textContent = '네트워크 오류: ' + err.message;
         gptEl.textContent = '';
       }
+    }); // <-- 'btn-analyze' 리스너는 여기서 끝납니다.
+
+    // 6. '채팅 전송' 버튼
+    document.getElementById('btn-send-chat').addEventListener('click', async () => {
+      const question = chatInput.value.trim();
+      const currentFen = board.fen();
+
+      if (!question) return;
+
+      // 사용자 질문을 로그에 추가
+      chatLog.textContent += `[나]: ${question}\n\n`;
+      chatInput.value = ''; // 입력창 비우기
+      chatLog.scrollTop = chatLog.scrollHeight; // 스크롤 맨 아래로
+
+      try {
+        const res = await fetch('/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fen: currentFen,
+            question: question
+          })
+        });
+
+        const data = await res.json();
+        const answer = data.answer || '(답변 없음)';
+
+        // 튜터 답변을 로그에 추가
+        chatLog.textContent += `[튜터]: ${answer}\n\n`;
+
+      } catch (err) {
+        chatLog.textContent += `[오류]: ${err.message}\n\n`;
+      }
+      chatLog.scrollTop = chatLog.scrollHeight; // 스크롤 맨 아래로
     });
   </script>
 </body>
