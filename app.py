@@ -1,4 +1,5 @@
 import chess  # <-- 1. chess 임포트 추가
+from fastapi.responses import FileResponse
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles  # <-- 2. StaticFiles 임포트 추가
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +18,9 @@ app.add_middleware(
 # 3. /static 경로로 static 폴더를 서빙하도록 마운트
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+@app.get("/")
+async def get_index():
+    return FileResponse("index.html")
 
 # ---- health check ----
 @app.get("/ping")
