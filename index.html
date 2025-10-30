@@ -80,30 +80,44 @@
   <script src="/static/chessboard-1.0.0.min.js"></script>
 
   <script>
-    // 1. Element들 미리 찾아두기
+   // 1. Element들 미리 찾아두기
     const fenEl = document.getElementById('fen');
     const engineEl = document.getElementById('engine-summary');
     const gptEl = document.getElementById('gpt-explain');
     const chatLog = document.getElementById('chat-log');
     const chatInput = document.getElementById('chat-input');
 
-    // 2. FEN 업데이트 함수 (이 함수는 변경 없음)
+    // 2. FEN 업데이트 함수
     function updateFEN() {
       try { fenEl.textContent = board.fen(); }
       catch { fenEl.textContent = '(FEN 계산 불가)'; }
     }
 
-    // 3. Chessboard 생성 (★★★★★ 여기가 핵심 수정사항 ★★★★★)
+    // 3. 마지막으로 둔 수 정보를 저장할 변수
+    let lastMoveInfo = null;
+
+    // 4. Chessboard 생성
     const board = Chessboard('board', {
       position: 'start',
       draggable: true,
       pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
-      onSnapEnd: updateFEN  // <-- 'onSnapEnd' 콜백을 사용
+      
+      // ★★★ 핵심 수정 1: 말이 놓일 때마다 'lastMoveInfo' 변수 업데이트 ★★★
+      onDrop: function(source, target, piece, newPos, oldPos) {
+        // newPos, oldPos는 chessboard.js의 내부 객체이므로 FEN으로 변환
+        const fenBefore = Chessboard.objToFen(oldPos);
+        const uciMove = source + target;
+        
+        lastMoveInfo = {
+          fen_before: fenBefore,
+          uci_move: uciMove
+        };
+      },
+      
+      // onSnapEnd는 FEN 텍스트 표시용으로만 사용
+      onSnapEnd: updateFEN
     });
 
-    // 4. 기존 FEN 업데이트 리스너 제거
-    // window.addEventListener('mouseup', updateFEN);   <-- 이 줄 제거
-    // window.addEventListener('touchend', updateFEN);  <-- 이 줄 제거
     updateFEN(); // 처음 한 번 실행
 
     // 5. '초기화' 버튼
@@ -112,30 +126,52 @@
       engineEl.textContent = '';
       gptEl.textContent = '';
       chatLog.textContent = '';
-      updateFEN(); // 초기화 후 FEN 업데이트
+      lastMoveInfo = null; // 마지막 수 정보 초기화
+      updateFEN();
     });
 
-    // 6. '설명: 초급' 버튼
+    // 6. '설명: 초급' 버튼 (기능은 동일)
     document.getElementById('btn-beginner').addEventListener('click', () => {
       alert('초급 모드: 쉬운 설명으로 표시합니다.');
     });
 
-    // 7. '이 위치 분석하기' 버튼 (내부 updateFEN() 호출 제거)
+    // 7. '이 위치 분석하기' 버튼 (★★★★★ 핵심 수정 2 ★★★★★)
     document.getElementById('btn-analyze').addEventListener('click', async () => {
-      // updateFEN(); // <-- onSnapEnd가 FEN을 항상 최신으로 유지하므로, 클릭 시 또 호출할 필요 없음
-      engineEl.textContent = '엔진 분석 중...';
-      gptEl.textContent = 'GPT 해설 생성 중...';
+      
+      let endpoint = '';
+      let payload = {};
+      
+      // 'lastMoveInfo'에 값이 있으면 '방금 둔 수'를 분석
+      if (lastMoveInfo) {
+        endpoint = '/analyze_move'; // 새 API 엔드포인트 호출
+        payload = {
+          fen_before: lastMoveInfo.fen_before,
+          uci_move: lastMoveInfo.uci_move,
+          level: 'beginner' 
+        };
+        engineEl.textContent = '방금 둔 수 분석 중...';
+        gptEl.textContent = 'GPT 해설 생성 중...';
+        
+        lastMoveInfo = null; // 분석 후 리셋 (다음 클릭은 '현재 위치' 분석)
+        
+      } else {
+        // 'lastMoveInfo'가 없으면 (e.g. 초기화 직후) '현재 위치'를 분석
+        endpoint = '/analyze_position'; // 기존 API 엔드포인트 호출
+        payload = {
+          fen: fenEl.textContent,
+          level: 'beginner',
+          depth: 14,
+          multipv: 3
+        };
+        engineEl.textContent = '현재 위치 분석 중...';
+        gptEl.textContent = 'GPT 해설 생성 중...';
+      }
 
       try {
-        const res = await fetch('/analyze', {
+        const res = await fetch(endpoint, { // <-- endpoint 변수 사용
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            fen: fenEl.textContent, // onSnapEnd 덕분에 이 FEN은 항상 정확함
-            level: 'beginner', 
-            depth: 14, 
-            multipv: 3
-          })
+          body: JSON.stringify(payload) // <-- payload 변수 사용
         });
 
         const data = await res.json();
@@ -147,17 +183,15 @@
       }
     });
 
-    // 8. '채팅 전송' 버튼
+    // 8. '채팅 전송' 버튼 (로직 동일)
     document.getElementById('btn-send-chat').addEventListener('click', async () => {
+      // (기존 코드와 동일)
       const question = chatInput.value.trim();
-      const currentFen = board.fen(); // 현재 FEN을 직접 가져옴
-
+      const currentFen = board.fen();
       if (!question) return;
-
       chatLog.textContent += `[나]: ${question}\n\n`;
       chatInput.value = '';
       chatLog.scrollTop = chatLog.scrollHeight;
-
       try {
         const res = await fetch('/ask', {
           method: 'POST',
@@ -165,14 +199,12 @@
           body: JSON.stringify({
             fen: currentFen,
             question: question,
-            level: 'beginner' // 채팅에도 level을 넘겨줄 수 있습니다 (추후 확장 대비)
+            level: 'beginner'
           })
         });
-
         const data = await res.json();
         const answer = data.answer || '(답변 없음)';
         chatLog.textContent += `[튜터]: ${answer}\n\n`;
-
       } catch (err) {
         chatLog.textContent += `[오류]: ${err.message}\n\n`;
       }
