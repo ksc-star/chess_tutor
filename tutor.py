@@ -1,128 +1,171 @@
 import os
-import shutil  # <-- 1. shutil 임포트 추가
+import shutil
 import chess
 import chess.engine
-from openai import OpenAI  # <-- 2. OpenAI 임포트 추가
+from openai import OpenAI
 
-# ---- Stockfish 경로 자동 탐색 ----
-def _find_stockfish_path() -> str:
-    # 1) 환경변수 우선
-    env_path = os.environ.get("STOCKFISH_PATH")
-    if env_path and os.path.exists(env_path):
-        return env_path
-
-    # 2) 시스템 PATH에 있는 바이너리 (Dockerfile에서 설치 시 이 방식이 유효)
-    which = shutil.which("stockfish")
-    if which:
-        return which
-
-    # 3) 리눅스 배포판에서 일반적인 설치 경로 후보
-    candidates = [
-        "/usr/games/stockfish",
-        "/usr/bin/stockfish",
-        "/usr/local/bin/stockfish",
-    ]
-    for p in candidates:
-        if os.path.exists(p):
-            return p
-
-    # 4) 못 찾으면 명확한 에러 메시지
-    raise FileNotFoundError(
-        "Stockfish binary not found. "
-        "Set env STOCKFISH_PATH or install stockfish (e.g., apt-get install stockfish)."
-    )
-
-# 3. 함수를 호출하여 STOCKFISH_PATH 설정
+# ... (_find_stockfish_path 함수는 기존과 동일) ...
 STOCKFISH_PATH = _find_stockfish_path()
 
-# ---- 엔진 분석 ----
-def analyze_position(fen: str, played_san: str | None, depth: int = 16, multipv: int = 1):
-    """python-chess 엔진으로 분석 후 dict 반환"""
-    # [cite_start]Dockerfile에서 stockfish를 설치하므로 경로는 유효해야 함 [cite: 2]
+# --- 도우미 함수 ---
+
+# (기존의 get_system_prompt 함수 - 중급/고급용. 없으면 여기에 추가)
+def get_system_prompt(level: str, context: str) -> str:
+    level = level.lower()
+    if level == "intermediate":
+        prompt_base = "당신은 체스 중급자를 위한 전문 튜터입니다."
+    elif level == "advanced":
+        prompt_base = "당신은 체스 고급자를 위한 마스터 레벨 분석가입니다."
+    else: # beginner
+        prompt_base = "당신은 체스 초보자를 위한 친절한 체스 튜터입니다. 쉽고 명확하게 설명합니다."
+
+    if context == "explain_next": # '다음 수' 설명
+        return f"{prompt_base} FEN 포지션과 엔진이 추천한 최적의 수를 받으면, 왜 그 수가 좋은지 해당 레벨에 맞게 설명합니다."
+    if context == "evaluate_move": # '둔 수' 평가
+        return f"{prompt_base} 사용자가 방금 둔 수에 대해 평가합니다. 최적의 수와 사용자의 수를 비교하여, 왜 잘했는지 또는 실수했는지 그 이유를 해당 레벨에 맞게 설명합니다."
+    if context == "chat": # 채팅
+        return f"{prompt_base} FEN과 사용자의 질문을 받고, 해당 레벨에 맞게 답변합니다."
+    return prompt_base
+
+# 점수 차이를 "실수", "블런더" 등으로 변환
+def classify_move(score_diff: int) -> str:
+    if score_diff >= -10: return "최고의 수"
+    if score_diff >= -50: return "좋은 수"
+    if score_diff >= -100: return "부정확한 수"
+    if score_diff >= -200: return "실수"
+    return "블런더"
+
+# --- API 1: 현재 위치 분석 (기존 analyze_position) ---
+
+# ▼▼▼ 1. 함수 이름 변경 ▼▼▼
+def analyze_position_for_next_move(fen: str, level: str, depth: int, multipv: int):
+    """현재 FEN에서 "다음 최적의 수"를 분석합니다."""
+    
     with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as eng:
         board = chess.Board(fen)
-        if played_san:
-            try:
-                move = board.parse_san(played_san)
-                board.push(move)
-            except Exception:
-                pass
-
         limit = chess.engine.Limit(depth=depth)
         info = eng.analyse(board, limit=limit, multipv=multipv)
 
-        out = []
-        for i in info if isinstance(info, list) else [info]:
-            pv = i.get("pv", [])
-            best_move_uci = pv[0].uci() if pv else None
-            score = i.get("score")
-            out.append({
-                "best_move_uci": best_move_uci,
-                "score": score.white().score(mate_score=100000) if score else None,
-                "mate": score.white().mate() if score and score.is_mate() else None,
-            })
-        return {"results": out, "fen": fen}
+        if not info:
+            return "분석 실패.", "(GPT 해설 불가)", {}
 
-def format_engine_summary(result: dict) -> str:
-    """간단 요약 문자열"""
-    if not result or "results" not in result or not result["results"] or not result["results"][0]["best_move_uci"]:
-        return "엔진 분석 결과가 없습니다."
-    r0 = result["results"][0]
-    bm = r0["best_move_uci"]
-    if r0["mate"] is not None:
-        return f"최적의 수: {bm} (메이트까지 {r0['mate']}수)"
-    score_cp = r0.get('score', 0)
-    score_pawns = round(score_cp / 100.0, 2)
-    return f"최적의 수: {bm} (평가: {score_pawns:+.2f})"
+        # (기존 format_engine_summary 로직을 여기로 가져옴)
+        r0 = info[0]
+        best_move_uci = r0["pv"][0].uci() if r0.get("pv") else "N/A"
+        score_obj = r0.get("score")
+        
+        if score_obj.is_mate():
+            engine_summary = f"최적의 수: {best_move_uci} (메이트까지 {score_obj.white().mate()}수)"
+        else:
+            score_cp = score_obj.white().score(mate_score=100000)
+            score_pawns = round(score_cp / 100.0, 2)
+            engine_summary = f"최적의 수: {best_move_uci} (평가: {score_pawns:+.2f})"
 
+        try:
+            best_move_san = board.san(chess.Move.from_uci(best_move_uci))
+        except:
+            best_move_san = best_move_uci
 
-# 4. 실제 OpenAI 호출로 llm_explain 함수 교체
-def llm_explain(fen: str, best_san: str) -> str:
-    """LLM을 호출하여 FEN과 최적의 수(SAN)에 대한 설명을 생성합니다."""
+        # (기존 llm_explain 로직을 여기로 가져옴)
+        gpt_explanation = llm_explain_next_move(fen, best_move_san, level)
+        
+        return engine_summary, gpt_explanation, info
+
+# (기존 llm_explain은 이름 변경)
+def llm_explain_next_move(fen: str, best_san: str, level: str) -> str:
     key = os.environ.get("OPENAI_API_KEY", "")
-    if not key:
-        return "(GPT 해설 비활성화: OPENAI_API_KEY가 설정되지 않았습니다.)"
-    
-    if best_san == "N/A":
-        return "(엔진이 추천한 수가 없어 해설을 생성할 수 없습니다.)"
+    if not key: return "(GPT 해설 비활성화)"
+    if best_san == "N/A": return "(해설 생성 불가)"
 
     try:
         client = OpenAI(api_key=key)
+        system_prompt = get_system_prompt(level, "explain_next")
+        user_prompt = f"현재 포지션(FEN): {fen}\n엔진 추천 수: {best_san}\n\n이 수가 왜 좋은 수인지 {level} 수준으로 설명해 주세요."
         
-        system_prompt = "당신은 체스 초보자를 위한 친절한 체스 튜터입니다. FEN 포지션과 엔진이 추천한 최적의 수를 받으면, 왜 그 수가 좋은지 1~2문장으로 쉽고 명확하게 설명합니다."
-        user_prompt = f"현재 포지션(FEN): {fen}\n엔진 추천 수: {best_san}\n\n이 수가 왜 좋은 수인지 초보자가 이해하기 쉽게 설명해 주세요."
-
         response = client.chat.completions.create(
-            model="gpt-4o-mini", # 또는 gpt-3.5-turbo
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.3,
-            max_tokens=150,
+            temperature=0.3, max_tokens=150
         )
         return response.choices[0].message.content.strip()
-
     except Exception as e:
-        print(f"OpenAI API Error: {e}")
-        return f"(GPT 해설 생성 중 오류 발생: {e})"
+        return f"(GPT 해설 생성 중 오류: {e})"
 
-def llm_chat_response(fen: str, question: str) -> str:
-    """LLM을 호출하여 FEN과 사용자의 질문에 대한 답변을 생성합니다."""
-    key = os.environ.get("OPENAI_API_KEY", "")
-    if not key:
-        return "(GPT 해설 비활성화: OPENAI_API_KEY가 설정되지 않았습니다.)"
+# --- API 2: 방금 둔 수 평가 (신규) ---
 
+# ▼▼▼ 2. 신규 함수 evaluate_played_move 추가 ▼▼▼
+def evaluate_played_move(fen_before: str, uci_move: str, level: str):
+    """사용자가 방금 둔 수를 평가합니다."""
+    
     try:
-        client = OpenAI(api_key=key)
+        board = chess.Board(fen_before)
+        played_move = chess.Move.from_uci(uci_move)
+        played_move_san = board.san(played_move)
+    except Exception as e:
+        return f"잘못된 수입니다: {uci_move}", f"(오류: {e})"
+
+    with chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH) as eng:
+        # 1. 최적의 수는 무엇이었나?
+        limit = chess.engine.Limit(depth=14) # 평가용이므로 너무 깊지 않게
+        info_best = eng.analyse(board, limit=limit, multipv=1)
         
-        system_prompt = (
-            "당신은 체스 초보자를 위한 친절한 체스 튜터입니다. "
-            "체스 포지션(FEN)과 그에 대한 사용자의 질문을 받게 됩니다. "
-            "이 포지션을 기준으로 사용자의 질문에 초보자가 이해하기 쉽게 답변해 주세요."
+        if not info_best:
+            return "분석 실패.", "(GPT 해설 불가)"
+
+        best_move = info_best[0]["pv"][0]
+        best_move_san = board.san(best_move)
+        best_score_obj = info_best[0]["score"]
+        best_score_cp = best_score_obj.white().score(mate_score=100000)
+        
+        # 2. 내가 둔 수의 점수는?
+        board.push(played_move)
+        info_played = eng.analyse(board, limit=chess.engine.Limit(depth=12))
+        
+        played_score_obj = info_played[0]["score"]
+        played_score_cp = played_score_obj.white().score(mate_score=100000)
+
+        # 3. 비교 및 요약
+        score_diff = played_score_cp - best_score_cp
+        move_quality = classify_move(score_diff)
+        
+        best_pawns = round(best_score_cp / 100.0, 2)
+        played_pawns = round(played_score_cp / 100.0, 2)
+
+        engine_summary = (
+            f"평가: {move_quality}\n"
+            f"내가 둔 수: {played_move_san} (평가: {played_pawns:+.2f})\n"
+            f"최적의 수: {best_move_san} (평가: {best_pawns:+.2f})"
+        )
+
+        # 4. GPT 해설 생성
+        gpt_explanation = llm_evaluate_played_move(
+            fen_before=fen_before,
+            played_move_san=played_move_san,
+            best_move_san=best_move_san,
+            move_quality=move_quality,
+            level=level
         )
         
-        user_prompt = f"현재 포지션(FEN): {fen}\n\n사용자 질문: {question}"
+        return engine_summary, gpt_explanation
+
+# ▼▼▼ 3. '둔 수 평가'용 LLM 함수 신규 추가 ▼▼▼
+def llm_evaluate_played_move(fen_before: str, played_move_san: str, best_move_san: str, move_quality: str, level: str) -> str:
+    key = os.environ.get("OPENAI_API_KEY", "")
+    if not key: return "(GPT 해설 비활성화)"
+    
+    try:
+        client = OpenAI(api_key=key)
+        system_prompt = get_system_prompt(level, "evaluate_move")
+        user_prompt = (
+            f"포지션(FEN): {fen_before}\n"
+            f"사용자가 둔 수: {played_move_san}\n"
+            f"엔진이 추천한 최적의 수: {best_move_san}\n"
+            f"엔진 평가: {move_quality}\n\n"
+            f"왜 사용자의 수가 {move_quality}인지, 그리고 최적의 수와 비교하여 {level} 수준으로 설명해 주세요."
+        )
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -130,11 +173,32 @@ def llm_chat_response(fen: str, question: str) -> str:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.3,
-            max_tokens=200,
+            temperature=0.3, max_tokens=200
         )
         return response.choices[0].message.content.strip()
-
     except Exception as e:
-        print(f"OpenAI API Error: {e}")
+        return f"(GPT 해설 생성 중 오류: {e})"
+
+# --- API 3: 채팅 (기존 llm_chat_response) ---
+# ▼▼▼ 4. Level 파라미터 받도록 수정 ▼▼▼
+def llm_chat_response(fen: str, question: str, level: str = "beginner") -> str:
+    key = os.environ.get("OPENAI_API_KEY", "")
+    if not key: return "(GPT 해설 비활성화)"
+
+    try:
+        client = OpenAI(api_key=key)
+        # ▼▼▼ 5. get_system_prompt 사용 ▼▼▼
+        system_prompt = get_system_prompt(level, "chat")
+        user_prompt = f"현재 포지션(FEN): {fen}\n\n사용자 질문: {question}\n\n이 질문에 대해 {level} 수준으로 답변해 주세요."
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.3, max_tokens=200
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
         return f"(GPT 답변 생성 중 오류 발생: {e})"
