@@ -74,7 +74,7 @@ def analyze_position_for_next_move(fen: str, level: str, depth: int, multipv: in
         if not info:
             return "분석 실패.", "(GPT 해설 불가)", {}
 
-        # ▼▼▼ [수정] multipv 값에 따라 info가 리스트일 수도, 단일 객체일 수도 있음 ▼▼▼
+        # multipv 값에 따라 info가 리스트일 수도, 단일 객체일 수도 있음
         r0 = info[0] if isinstance(info, list) else info
         
         pv = r0.get("pv", [])
@@ -138,12 +138,14 @@ def evaluate_played_move(fen_before: str, uci_move: str, level: str):
         # 1. 최적의 수는 무엇이었나?
         limit = chess.engine.Limit(depth=14)
         
-        # ▼▼▼ [수정] multipv=1이므로 info_best는 단일 객체임. [0] 제거 ▼▼▼
-        info_best = eng.analyse(board, limit=limit, multipv=1)
+        # ▼▼▼ [수정] multipv=1이므로 info_best는 리스트(list)입니다. [0]으로 첫 항목에 접근합니다. ▼▼▼
+        info_best_list = eng.analyse(board, limit=limit, multipv=1)
         
-        if not info_best:
+        if not info_best_list:
             return "분석 실패.", "(GPT 해설 불가)"
-
+        
+        info_best = info_best_list[0] # 리스트의 첫 번째 항목(딕셔너리)을 가져옴
+        
         pv = info_best.get("pv", [])
         if not pv:
              return "최적의 수 분석 실패.", "(GPT 해설 불가)"
@@ -161,7 +163,7 @@ def evaluate_played_move(fen_before: str, uci_move: str, level: str):
         # 2. 내가 둔 수의 점수는?
         board.push(played_move)
         
-        # ▼▼▼ [수정] multipv=1(기본값)이므로 info_played는 단일 객체임. [0] 제거 ▼▼▼
+        # ▼▼▼ [수정] multipv가 없으면 info_played는 단일 객체(딕셔너리)입니다. [0]이 필요 없습니다. ▼▼▼
         info_played = eng.analyse(board, limit=chess.engine.Limit(depth=12))
         
         if not info_played:
