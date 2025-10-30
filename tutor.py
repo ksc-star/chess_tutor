@@ -4,6 +4,34 @@ import chess
 import chess.engine
 from openai import OpenAI
 
+# ---- Stockfish 경로 자동 탐색 ----
+def _find_stockfish_path() -> str:
+    # 1) 환경변수 우선
+    env_path = os.environ.get("STOCKFISH_PATH")
+    if env_path and os.path.exists(env_path):
+        return env_path
+
+    # 2) 시스템 PATH에 있는 바이너리 (Dockerfile에서 설치 시 이 방식이 유효)
+    which = shutil.which("stockfish")
+    if which:
+        return which
+
+    # 3) 리눅스 배포판에서 일반적인 설치 경로 후보
+    candidates = [
+        "/usr/games/stockfish",
+        "/usr/bin/stockfish",
+        "/usr/local/bin/stockfish",
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+
+    # 4) 못 찾으면 명확한 에러 메시지
+    raise FileNotFoundError(
+        "Stockfish binary not found. "
+        "Set env STOCKFISH_PATH or install stockfish (e.g., apt-get install stockfish)."
+    )
+
 # ... (_find_stockfish_path 함수는 기존과 동일) ...
 STOCKFISH_PATH = _find_stockfish_path()
 
