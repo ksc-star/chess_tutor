@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GPT + Stockfish Chess Tutor</title>
+  <link rel="stylesheet" href="/static/chessboard-1.0.0.min.css">
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 0; }
+    header { text-align: center; padding: 16px 8px; font-weight: 700; font-size: 20px; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 8px 16px 24px; }
+    #board { width: min(92vw, 480px); margin: 16px auto; }
+    .toolbar { display: flex; gap: 8px; justify-content: center; margin-top: 8px; flex-wrap: wrap; }
+    .btn { border: 1px solid #d1d5db; background: #fff; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+    .note { text-align: center; color: #6b7280; font-size: 12px; margin-top: 8px; }
+    .panes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; max-width: 1100px; margin: 12px auto 0; }
+    .pane { border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; min-height: 180px; }
+    .pane h3 { margin: 4px 0 8px; font-size: 14px; color: #374151; }
+    .pane pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <header>GPT + Stockfish Chess Tutor</header>
+
+  <div class="wrap">
+    <div class="toolbar">
+      <button id="btn-reset" class="btn">초기화</button>
+      <button id="btn-beginner" class="btn">설명: 초급</button>
+      <button id="btn-analyze" class="btn">이 위치 분석하기</button>
+    </div>
+
+    <div id="board"></div>
+    <div class="note">현재 FEN: <span id="fen">-</span></div>
+
+    <div class="panes">
+      <div class="pane">
+        <h3>엔진 요약</h3>
+        <pre id="engine-summary"></pre>
+      </div>
+      <div class="pane">
+        <h3>GPT 해설</h3>
+        <pre id="gpt-explain"></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- jQuery 먼저 -->
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <!-- chessboard.js -->
+  <script src="/static/chessboard-1.0.0.min.js"></script>
+
+  <script>
+    const board = Chessboard('board', {
+      position: 'start',
+      draggable: true,
+      pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png'
+    });
+
+    const fenEl = document.getElementById('fen');
+    const engineEl = document.getElementById('engine-summary');
+    const gptEl = document.getElementById('gpt-explain');
+
+    function updateFEN() {
+      try { fenEl.textContent = board.fen(); }
+      catch { fenEl.textContent = '(FEN 계산 불가)'; }
+    }
+    updateFEN();
+    window.addEventListener('mouseup', updateFEN);
+    window.addEventListener('touchend', updateFEN);
+
+    document.getElementById('btn-reset').addEventListener('click', () => {
+      board.start(); engineEl.textContent = ''; gptEl.textContent = ''; updateFEN();
+    });
+
+    document.getElementById('btn-beginner').addEventListener('click', () => {
+      alert('초급 모드: 쉬운 설명으로 표시합니다.');
+    });
+
+    document.getElementById('btn-analyze').addEventListener('click', async () => {
+      updateFEN();
+      engineEl.textContent = '엔진 분석 중...';
+      gptEl.textContent = 'GPT 해설 생성 중...';
+
+      try {
+        const res = await fetch('/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fen: fenEl.textContent, level: 'beginner', depth: 14, multipv: 3
+          })
+        });
+
+        // 서버는 항상 200으로 에러 사유를 JSON에 실어 보냅니다.
+        const data = await res.json();
+        engineEl.textContent = data.engine_summary || '';
+        gptEl.textContent = data.gpt_explain || '';
+      } catch (err) {
+        engineEl.textContent = '네트워크 오류: ' + err.message;
+        gptEl.textContent = '';
+      }
+    });
+  </script>
+</body>
+</html>
