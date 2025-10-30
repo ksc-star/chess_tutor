@@ -79,46 +79,50 @@
   <!-- chessboard.js -->
   <script src="/static/chessboard-1.0.0.min.js"></script>
 
-<script>
-    const board = Chessboard('board', {
-      position: 'start',
-      draggable: true,
-      pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png'
-    });
-
+  <script>
     // 1. Element들 미리 찾아두기
     const fenEl = document.getElementById('fen');
     const engineEl = document.getElementById('engine-summary');
     const gptEl = document.getElementById('gpt-explain');
-    const chatLog = document.getElementById('chat-log'); // chat-log도 추가
-    const chatInput = document.getElementById('chat-input'); // chat-input도 추가
+    const chatLog = document.getElementById('chat-log');
+    const chatInput = document.getElementById('chat-input');
 
-    // 2. FEN 업데이트 함수
+    // 2. FEN 업데이트 함수 (이 함수는 변경 없음)
     function updateFEN() {
       try { fenEl.textContent = board.fen(); }
       catch { fenEl.textContent = '(FEN 계산 불가)'; }
     }
-    updateFEN(); // 처음 한 번 실행
-    window.addEventListener('mouseup', updateFEN);
-    window.addEventListener('touchend', updateFEN);
 
-    // 3. '초기화' 버튼
+    // 3. Chessboard 생성 (★★★★★ 여기가 핵심 수정사항 ★★★★★)
+    const board = Chessboard('board', {
+      position: 'start',
+      draggable: true,
+      pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
+      onSnapEnd: updateFEN  // <-- 'onSnapEnd' 콜백을 사용
+    });
+
+    // 4. 기존 FEN 업데이트 리스너 제거
+    // window.addEventListener('mouseup', updateFEN);   <-- 이 줄 제거
+    // window.addEventListener('touchend', updateFEN);  <-- 이 줄 제거
+    updateFEN(); // 처음 한 번 실행
+
+    // 5. '초기화' 버튼
     document.getElementById('btn-reset').addEventListener('click', () => {
       board.start();
       engineEl.textContent = '';
       gptEl.textContent = '';
-      chatLog.textContent = ''; // 채팅 로그 비우기 추가
-      updateFEN();
+      chatLog.textContent = '';
+      updateFEN(); // 초기화 후 FEN 업데이트
     });
 
-    // 4. '설명: 초급' 버튼
+    // 6. '설명: 초급' 버튼
     document.getElementById('btn-beginner').addEventListener('click', () => {
       alert('초급 모드: 쉬운 설명으로 표시합니다.');
     });
 
-    // 5. '이 위치 분석하기' 버튼
+    // 7. '이 위치 분석하기' 버튼 (내부 updateFEN() 호출 제거)
     document.getElementById('btn-analyze').addEventListener('click', async () => {
-      updateFEN();
+      // updateFEN(); // <-- onSnapEnd가 FEN을 항상 최신으로 유지하므로, 클릭 시 또 호출할 필요 없음
       engineEl.textContent = '엔진 분석 중...';
       gptEl.textContent = 'GPT 해설 생성 중...';
 
@@ -127,7 +131,10 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            fen: fenEl.textContent, level: 'beginner', depth: 14, multipv: 3
+            fen: fenEl.textContent, // onSnapEnd 덕분에 이 FEN은 항상 정확함
+            level: 'beginner', 
+            depth: 14, 
+            multipv: 3
           })
         });
 
@@ -138,19 +145,18 @@
         engineEl.textContent = '네트워크 오류: ' + err.message;
         gptEl.textContent = '';
       }
-    }); // <-- 'btn-analyze' 리스너는 여기서 끝납니다.
+    });
 
-    // 6. '채팅 전송' 버튼
+    // 8. '채팅 전송' 버튼
     document.getElementById('btn-send-chat').addEventListener('click', async () => {
       const question = chatInput.value.trim();
-      const currentFen = board.fen();
+      const currentFen = board.fen(); // 현재 FEN을 직접 가져옴
 
       if (!question) return;
 
-      // 사용자 질문을 로그에 추가
       chatLog.textContent += `[나]: ${question}\n\n`;
-      chatInput.value = ''; // 입력창 비우기
-      chatLog.scrollTop = chatLog.scrollHeight; // 스크롤 맨 아래로
+      chatInput.value = '';
+      chatLog.scrollTop = chatLog.scrollHeight;
 
       try {
         const res = await fetch('/ask', {
@@ -158,21 +164,21 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             fen: currentFen,
-            question: question
+            question: question,
+            level: 'beginner' // 채팅에도 level을 넘겨줄 수 있습니다 (추후 확장 대비)
           })
         });
 
         const data = await res.json();
         const answer = data.answer || '(답변 없음)';
-
-        // 튜터 답변을 로그에 추가
         chatLog.textContent += `[튜터]: ${answer}\n\n`;
 
       } catch (err) {
         chatLog.textContent += `[오류]: ${err.message}\n\n`;
       }
-      chatLog.scrollTop = chatLog.scrollHeight; // 스크롤 맨 아래로
+      chatLog.scrollTop = chatLog.scrollHeight;
     });
   </script>
+
 </body>
 </html>
