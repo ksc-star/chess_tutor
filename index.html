@@ -17,6 +17,30 @@
     .pane { border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; min-height: 180px; }
     .pane h3 { margin: 4px 0 8px; font-size: 14px; color: #374151; }
     .pane pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-size: 14px; }
+    #chat-log {
+  min-height: 100px; 
+  max-height: 250px; 
+  overflow-y: auto;
+  white-space: pre-wrap; 
+  word-break: break-word; 
+  margin: 8px 0; /* 위아래 여백 */
+  font-size: 14px; 
+  border: 1px solid #eee; 
+  padding: 8px;
+  border-radius: 4px; 
+  background: #f9f9f9;
+}
+.chat-input-area { 
+  display: flex; 
+  gap: 8px; 
+  margin-bottom: 12px; /* 아래 'GPT 해설' 제목과 간격 */
+}
+#chat-input { 
+  flex-grow: 1; 
+  border: 1px solid #d1d5db; 
+  border-radius: 4px; 
+  padding: 8px 10px; 
+}
   </style>
 </head>
 <body>
